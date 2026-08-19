@@ -1,4 +1,7 @@
-# MCP-CAN: Virtual CAN + MCP Server
+# MCP-CAN: Bridging Vehicle Data to LLMs via MCP
+
+
+## Virtual CAN + MCP Server
 
 An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE (or streamable-HTTP), no hardware required by default.
 

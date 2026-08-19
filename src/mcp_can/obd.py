@@ -5,6 +5,33 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 OBD_BROADCAST_ID = 0x7DF
 OBD_RESPONSE_BASE_ID = 0x7E8  # first ECU response ID
 
+_DTC_CATEGORIES = "PCBU"  # Powertrain / Chassis / Body / Network, per SAE J2012
+
+
+def encode_dtc(code: str) -> Tuple[int, int]:
+    """Encode a J2012-style DTC string (e.g. "P0217") into its 2-byte wire form."""
+    category = _DTC_CATEGORIES.index(code[0].upper())
+    d1, d2, d3, d4 = (int(c, 16) for c in code[1:5])
+    byte_a = (category << 6) | (d1 << 4) | d2
+    byte_b = (d3 << 4) | d4
+    return byte_a, byte_b
+
+
+def decode_dtc(byte_a: int, byte_b: int) -> str:
+    """Inverse of `encode_dtc`."""
+    category = _DTC_CATEGORIES[(byte_a >> 6) & 0x3]
+    d1, d2 = (byte_a >> 4) & 0x3, byte_a & 0xF
+    d3, d4 = (byte_b >> 4) & 0xF, byte_b & 0xF
+    return f"{category}{d1:01X}{d2:01X}{d3:01X}{d4:01X}"
+
+
+def decode_dtcs(value_bytes: List[int]) -> List[str]:
+    """Decode a Mode 03 response's DTC bytes (pairs of bytes, one per code)."""
+    return [
+        decode_dtc(value_bytes[i], value_bytes[i + 1])
+        for i in range(0, len(value_bytes) - 1, 2)
+    ]
+
 
 def _single_frame(payload: List[int]) -> List[int]:
     """Build a single-frame ISO-TP message: [len] + payload, padded to 8 bytes."""
@@ -34,10 +61,15 @@ def _supported_mask(pids: List[int]) -> Tuple[int, int, int, int]:
     return (mask[0], mask[1], mask[2], mask[3])
 
 
-def simulate_response(service: int, pid: Optional[int]) -> Optional[List[int]]:
+def simulate_response(
+    service: int, pid: Optional[int], dtcs: Optional[List[str]] = None
+) -> Optional[List[int]]:
     """Return payload bytes (without length) for a given OBD-II request.
 
-    We implement a small subset as single-frame responses.
+    We implement a small subset as single-frame responses. `dtcs` is the
+    currently active fault codes (see `simulator/faults.py`); a single-frame
+    response fits at most 3 (7 payload bytes: 1 for the service id + 2 per
+    code).
     """
     if service == 0x01:
         if pid == 0x00:
@@ -57,8 +89,10 @@ def simulate_response(service: int, pid: Optional[int]) -> Optional[List[int]]:
         if pid == 0x51:  # Fuel type (1 = gasoline)
             return [0x41, 0x51, 0x01]
     if service == 0x03:  # DTCs
-        # Return no DTCs
-        return [0x43]
+        payload = [0x43]
+        for code in (dtcs or [])[:3]:
+            payload.extend(encode_dtc(code))
+        return payload
     if service == 0x09:
         if pid == 0x00:
             a, b, c, d = _supported_mask([0x02, 0x0A])
@@ -129,3 +163,14 @@ def decode_pid_value(pid: Optional[int], value_bytes: List[int]) -> Optional[Dic
         fuel_types = {1: "gasoline"}
         return {"name": "fuel_type", "value": fuel_types.get(a, f"unknown(0x{a:02x})")}
     return None
+
+
+def decode_response(
+    response_service: int, pid: Optional[int], value_bytes: List[int]
+) -> Optional[Dict[str, Any]]:
+    """Best-effort decode dispatching on response service: Mode 03 (0x43)
+    responses carry DTCs rather than a PID'd value, so `decode_pid_value`
+    (which expects a `pid`) doesn't apply to them."""
+    if response_service == 0x43:
+        return {"dtcs": decode_dtcs(value_bytes)}
+    return decode_pid_value(pid, value_bytes)

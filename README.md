@@ -9,7 +9,8 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
 - Virtual CAN backend (python-can) out of the box; optional SocketCAN/vCAN on Linux.
 - DBC-driven encoding/decoding via `cantools`.
 - ECU simulator that streams multiple messages, plus OBD-II and UDS-style diagnostic responders.
-- Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request).
+- Correlated driving-dynamics signal generation, plus named fault-injection scenarios (`overheat`, `abs_fault`, `low_fuel`) with matching DTCs.
+- Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request, fault).
 - Structured tool output (typed Pydantic models), duration-capped tool calls, `/healthz`, colorized logging.
 - Read-only live web dashboard (`/dashboard`): signal values and recent frames, updated over SSE.
 - Dockerfile + docker compose for server + simulator.
@@ -25,6 +26,8 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
   - `config.py` – env settings (`MCP_CAN_*`) + logging setup
   - `models.py` – internal bus-layer dataclass (`Frame`)
   - `simulator/runner.py` – ECU simulator + OBD/diagnostic responders
+  - `simulator/state.py` – correlated driving-dynamics state (RPM/speed/throttle/etc.)
+  - `simulator/faults.py` – named fault-injection presets + activation protocol
   - `server/fastmcp_server.py` – MCP tools/resources + dashboard routes
   - `server/schemas.py` – Pydantic models for MCP tool structured output
   - `server/live_state.py` – background bus listener backing the dashboard
@@ -87,12 +90,21 @@ With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard
 | `get_vehicle_snapshot` | tool | Last known value of every signal seen so far, one entry per signal (not per frame) with an `age_s` freshness indicator: a single-call overview instead of decoding a frame stream yourself. |
 | `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
 | `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
+| `activate_fault_scenario` | tool | Activate (or clear) a named fault-injection preset (`overheat`, `abs_fault`, `low_fuel`) in the running simulator; see below. |
 | `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
 
 `read_can_frames`/`filter_frames`/`monitor_signal` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener: they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
 
 ### About the diagnostic responder
 `vehicle.dbc` defines a UDS-like diagnostic schema: `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU, but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED`; see `diagnostics.py::handle_service`.
+
+### Fault injection
+Three named scenarios (`simulator/faults.py::PRESETS`) let you force the simulator into a specific fault state instead of waiting on random signal generation:
+- `overheat` – `ENGINE_TEMP` pinned to its hottest reportable value, `SYSTEM_STATUS` set to `FAULT_PRESENT`, DTC `P0217` (Engine Overtemp Condition).
+- `abs_fault` – all four `WHEEL_SPEED_*` signals stuck at zero, `SYSTEM_STATUS` set to `FAULT_PRESENT`, DTC `C0035` (Left Front Wheel Speed Sensor Circuit).
+- `low_fuel` – `FUEL_LEVEL` pinned critically low; no DTC (a low-fuel light isn't a stored trouble code on a real vehicle either).
+
+Activating a scenario sends a small control frame on the bus (like OBD/diagnostic requests, this is a round trip to whichever process is running the simulator, so it needs `mcp-can demo`/`simulate` already running) and overrides the named signals until cleared. Any DTCs the active scenario sets show up in `send_obd_request`/`obd-request`'s Mode 03 (service=3) response. Use `mcp-can fault list` or the `activate_fault_scenario` tool's docstring to see the current preset descriptions; pass `preset=None` (CLI: `clear`) to deactivate.
 
 ## MCP Inspector (GUI for your tools)
 Use the official Inspector to explore and call your MCP tools without writing a host:
@@ -139,6 +151,7 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 - `mcp-can monitor <signal> --seconds 2.0 [--json]` – watch one signal (live output by default).
 - `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – OBD-II request; response includes a decoded value for known PIDs.
 - `mcp-can diag-request --service-id <hex|int> [--parameter-id] [--data-field]` – UDS-style diagnostic request; prints every ECU's response.
+- `mcp-can fault <preset|clear|list>` – activate/clear a fault-injection scenario in a running simulator, or list available presets.
 
 `server`/`demo`/`simulate` all print colorized logs (via `rich`) instead of raw text.
 

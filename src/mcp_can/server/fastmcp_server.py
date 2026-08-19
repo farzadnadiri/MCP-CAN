@@ -22,12 +22,14 @@ from ..diagnostics import (
     ecu_name_from_response_message,
     response_code_name,
 )
-from ..obd import build_request, decode_pid_value, parse_response
+from ..obd import build_request, decode_response, parse_response
+from ..simulator.faults import FAULT_ACK_ID, PRESETS, build_control_frame
 from .live_state import DEFAULT_HISTORY_WINDOW_S, LiveState
 from .schemas import (
     DecodeResult,
     DiagnosticEcuResponse,
     DiagnosticResult,
+    FaultScenarioResult,
     FrameOut,
     ObdResponse,
     SignalSample,
@@ -194,7 +196,7 @@ def create_app() -> FastMCP:
                 arbitration_id=hex(msg.arbitration_id),
                 response_service=response_service,
                 pid=resp_pid,
-                decoded=decode_pid_value(resp_pid, value_bytes),
+                decoded=decode_response(response_service, resp_pid, value_bytes),
                 raw_data=list(msg.data),
             )
         except Exception as e:
@@ -257,6 +259,48 @@ def create_app() -> FastMCP:
             return DiagnosticResult(status="success", responses=responses)
         except Exception as e:
             return DiagnosticResult(status="error", message=str(e))
+        finally:
+            shutdown_bus(bus)
+
+    @mcp.tool()
+    def activate_fault_scenario(
+        preset: Optional[str] = None,
+        timeout_s: float = 2.0,
+    ) -> FaultScenarioResult:
+        """Activate a fault-injection scenario in the simulator, or clear the
+        active one by passing preset=None. Available presets: "overheat"
+        (engine at its hottest reportable temperature, SYSTEM_STATUS faults),
+        "abs_fault" (all wheel speed sensors stuck at zero, SYSTEM_STATUS
+        faults), "low_fuel" (fuel level pinned critically low). Where a
+        preset sets DTCs, they then show up in `send_obd_request`'s Mode 03
+        (service=3) response. Only affects a simulator sharing this
+        process's virtual bus (`mcp-can demo`)."""
+        timeout_s = _capped_duration(timeout_s)
+        if preset is not None and preset not in PRESETS:
+            return FaultScenarioResult(
+                status="error",
+                message=f"Unknown preset {preset!r}. Choices: {', '.join(PRESETS)}",
+            )
+        bus = make_bus(settings.can_interface, settings.can_channel)
+        try:
+            arb_id, data = build_control_frame(preset)
+            bus.send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=False))
+            end = time.time() + timeout_s
+            while time.time() < end:
+                msg = bus.recv(timeout=0.1)
+                if msg and msg.arbitration_id == FAULT_ACK_ID:
+                    active = PRESETS.get(preset) if preset else None
+                    return FaultScenarioResult(
+                        status="success",
+                        active_preset=preset,
+                        description=active.description if active else None,
+                        dtcs=list(active.dtcs) if active else [],
+                    )
+            return FaultScenarioResult(
+                status="timeout", message="No ack from simulator within timeout_s"
+            )
+        except Exception as e:
+            return FaultScenarioResult(status="error", message=str(e))
         finally:
             shutdown_bus(bus)
 

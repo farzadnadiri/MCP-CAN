@@ -53,6 +53,14 @@ class DiagnosticResult(BaseModel):
     message: Optional[str] = None
 
 
+class FaultScenarioResult(BaseModel):
+    status: str
+    active_preset: Optional[str] = None
+    description: Optional[str] = None
+    dtcs: List[str] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
 class SignalState(BaseModel):
     value: Any
     unit: str

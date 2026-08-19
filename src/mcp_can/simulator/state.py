@@ -22,7 +22,13 @@ from typing import Callable, Dict, Optional
 
 IDLE_RPM = 800.0
 AMBIENT_TEMP_C = 20.0
-OPERATING_TEMP_C = 90.0
+# vehicle.dbc declares ENGINE_TEMP's range as -40..127.5, but it's only 8
+# bits at scale 0.5/offset -40, so the actual encodable ceiling is
+# 255*0.5-40 = 87.5 -- a value above that raises in cantools' Message.encode
+# rather than just clamping. Target and clamp below that ceiling so the
+# simulator doesn't silently stop sending ENGINE_STATUS once warmed up.
+OPERATING_TEMP_C = 85.0
+ENGINE_TEMP_MAX_C = 87.5
 
 
 @dataclass
@@ -69,7 +75,7 @@ def tick(state: DrivingState, dt_s: float) -> DrivingState:
         throttle_pct=throttle,
         rpm=_clamp(rpm, 0.0, 16383.0),
         speed_kph=_clamp(speed, 0.0, 300.0),
-        engine_temp_c=_clamp(engine_temp, -40.0, 127.5),
+        engine_temp_c=_clamp(engine_temp, -40.0, ENGINE_TEMP_MAX_C),
         fuel_pct=_clamp(fuel, 0.0, 100.0),
     )
 

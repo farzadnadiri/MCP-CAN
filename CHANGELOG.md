@@ -6,6 +6,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Fault injection (`simulator/faults.py`): three named scenario presets
+  (`overheat`, `abs_fault`, `low_fuel`) that force specific signals to
+  fault-condition values and, where applicable, populate a matching DTC
+  (`P0217`, `C0035`) visible in `send_obd_request`'s Mode 03 response.
+  Activated via the new `activate_fault_scenario` MCP tool or `mcp-can
+  fault <preset|clear|list>` CLI command; both round-trip a small control
+  frame to the simulator process, the same pattern already used by
+  OBD/diagnostic requests. `obd.py` gained `encode_dtc`/`decode_dtc`
+  (J2012-style 2-byte DTC wire format) and `decode_response` (dispatches
+  Mode 03 responses to DTC decoding instead of `decode_pid_value`, which
+  only handles PID'd responses).
 - Correlated, plausible signal generation (`simulator/state.py`): a
   background `VehicleState` ticks a small set of driving-dynamics variables
   (throttle, RPM, speed, engine temp, fuel level) with realistic lag and
@@ -13,8 +24,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   independently at random. `ENGINE_SPEED`/`ENGINE_LOAD` now track throttle,
   `WHEEL_SPEED_*` tracks a common vehicle speed with small per-wheel jitter,
   `FUEL_LEVEL` only decreases, `ENGINE_TEMP` warms toward operating
-  temperature over time. Signals with no correlation rule (doors, seatbelts,
-  fault flags, etc.) keep the previous independent-random behavior.
+  temperature over time (capped at 87.5, the actual ceiling its 8-bit width
+  can encode -- see `ENGINE_TEMP_MAX_C` -- rather than the DBC's declared
+  but unencodable 127.5 max). Signals with no correlation rule (doors,
+  seatbelts, fault flags, etc.) keep the previous independent-random
+  behavior. `SimThread` also gained a general clamp-to-encodable-range step
+  for correlated/fault-overridden signal values, so a value outside what a
+  signal's bit width can hold gets saturated instead of raising out of
+  `Message.encode` and silently dropping that frame.
 - `get_vehicle_snapshot` MCP tool (plus `mcp-can snapshot` CLI command):
   the last known value of every signal seen so far, one entry per signal
   with an `age_s` freshness indicator, instead of decoding a stream of raw

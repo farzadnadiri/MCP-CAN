@@ -18,8 +18,9 @@ from .diagnostics import (
     ecu_name_from_response_message,
     response_code_name,
 )
-from .obd import build_request, decode_pid_value, parse_response
+from .obd import build_request, decode_response, parse_response
 from .server.fastmcp_server import main as run_server
+from .simulator.faults import FAULT_ACK_ID, PRESETS, build_control_frame
 from .simulator.runner import run_simulator
 
 app = typer.Typer(help="MCP-CAN: simulate, inspect and serve CAN data over MCP.")
@@ -268,7 +269,7 @@ def obd_request(
         out = {
             "arbitration_id": hex(msg.arbitration_id),
             "data": [int(b) for b in msg.data],
-            "decoded": decode_pid_value(resp_pid, value_bytes),
+            "decoded": decode_response(response_service, resp_pid, value_bytes),
         }
         typer.echo(json.dumps(out, indent=2))
     finally:
@@ -328,6 +329,51 @@ def diag_request(
             typer.echo(json.dumps({"status": "timeout"}))
             raise typer.Exit(code=1)
         typer.echo(json.dumps({"status": "success", "responses": responses}, indent=2))
+    finally:
+        shutdown_bus(bus)
+
+
+@app.command("fault")
+def fault_scenario(
+    preset: str = typer.Argument(
+        ..., help="Scenario name to activate, 'clear' to deactivate, or 'list'"
+    ),
+    timeout: float = 1.0,
+) -> None:
+    """Activate (or clear) a fault-injection scenario in a running simulator.
+
+    Requires `mcp-can simulate`/`demo` to already be running: this sends a
+    control frame over the bus and waits for the simulator to ack it, the
+    same round-trip pattern as `obd-request`/`diag-request`.
+    """
+    if preset == "list":
+        table = Table(title="Fault scenarios")
+        table.add_column("Name")
+        table.add_column("Description")
+        table.add_column("DTCs")
+        for p in PRESETS.values():
+            table.add_row(p.name, p.description, ", ".join(p.dtcs) or "-")
+        console.print(table)
+        return
+    target: Optional[str] = None if preset == "clear" else preset
+    if target is not None and target not in PRESETS:
+        console.print(
+            f"[red]Unknown scenario '{preset}'. Run 'mcp-can fault list' to see options.[/red]"
+        )
+        raise typer.Exit(code=1)
+    settings = get_settings()
+    bus = make_bus(settings.can_interface, settings.can_channel)
+    try:
+        arb_id, data = build_control_frame(target)
+        bus.send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=False))
+        end = _time.time() + timeout
+        while _time.time() < end:
+            msg = bus.recv(timeout=0.1)
+            if msg and msg.arbitration_id == FAULT_ACK_ID:
+                console.print(f"[green]Scenario now active: {target or '(cleared)'}[/green]")
+                return
+        console.print("[yellow]No ack from simulator -- is it running?[/yellow]")
+        raise typer.Exit(code=1)
     finally:
         shutdown_bus(bus)
 

@@ -12,6 +12,7 @@ from ..config import configure_logging, get_settings
 from ..dbc import decode_frame, load_dbc, signal_int
 from ..diagnostics import REQUEST_MESSAGE, RESPONSE_MESSAGES, handle_service
 from ..obd import OBD_BROADCAST_ID, build_response_frame, parse_request, simulate_response
+from .faults import FaultListenerThread, FaultState
 from .profiles import DEFAULT_PROFILE
 from .state import CORRELATED_SIGNALS, VehicleState
 
@@ -26,6 +27,7 @@ class SimThread(threading.Thread):
         period: float,
         bus: can.BusABC,
         vehicle_state: Optional[VehicleState] = None,
+        fault_state: Optional[FaultState] = None,
     ):
         super().__init__(daemon=True)
         self.db = db
@@ -33,6 +35,7 @@ class SimThread(threading.Thread):
         self.period = period
         self.bus = bus
         self.vehicle_state = vehicle_state
+        self.fault_state = fault_state
 
     def _random_signal_value(self, sig: cantools.database.can.signal.Signal):
         if sig.choices:
@@ -48,9 +51,27 @@ class SimThread(threading.Thread):
         raw = max(0, min(raw, max_raw))
         return raw * sig.scale + sig.offset if sig.scale else raw
 
+    def _clamp_to_encodable(self, sig: cantools.database.can.signal.Signal, value):
+        """Clamp a physical value to what `sig`'s bit width can actually encode.
+
+        A signal's declared min/max (as read from the DBC) isn't always
+        reachable by its bit width -- e.g. ENGINE_TEMP declares up to 127.5
+        but only has 8 bits at scale 0.5/offset -40, capping out at 87.5.
+        Values from CORRELATED_SIGNALS or fault overrides aren't pre-clamped
+        the way `_random_signal_value` is, so without this, `Message.encode`
+        raises instead of the frame just going out with a saturated value.
+        """
+        if sig.choices or not sig.scale:
+            return value
+        max_raw = 2 ** sig.length - 1
+        raw = max(0, min((value - sig.offset) / sig.scale, max_raw))
+        return raw * sig.scale + sig.offset
+
     def _signal_value(self, sig: cantools.database.can.signal.Signal, driving_state):
+        if self.fault_state is not None and self.fault_state.has_override(sig.name):
+            return self._clamp_to_encodable(sig, self.fault_state.get_override(sig.name))
         if driving_state is not None and sig.name in CORRELATED_SIGNALS:
-            return CORRELATED_SIGNALS[sig.name](driving_state)
+            return self._clamp_to_encodable(sig, CORRELATED_SIGNALS[sig.name](driving_state))
         return self._random_signal_value(sig)
 
     def run(self):
@@ -75,16 +96,18 @@ class SimThread(threading.Thread):
 
 
 class OBDResponderThread(threading.Thread):
-    def __init__(self, bus: can.BusABC):
+    def __init__(self, bus: can.BusABC, fault_state: Optional[FaultState] = None):
         super().__init__(daemon=True)
         self.bus = bus
+        self.fault_state = fault_state
 
     def run(self) -> None:
         while True:
             msg = self.bus.recv(timeout=0.1)
             if msg and msg.arbitration_id == OBD_BROADCAST_ID and len(msg.data) > 0:
                 service, pid = parse_request(msg.data)
-                payload = simulate_response(service, pid)
+                dtcs = self.fault_state.dtcs() if self.fault_state else None
+                payload = simulate_response(service, pid, dtcs=dtcs)
                 if payload is not None:
                     try:
                         arb_id, data = build_response_frame(payload)
@@ -151,23 +174,33 @@ def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
     bus = make_bus(settings.can_interface, settings.can_channel)
     vehicle_state = VehicleState()
     vehicle_state.start()
+    fault_state = FaultState()
     threads: List[SimThread] = []
     for msg_name, period in profile:
-        t = SimThread(db, msg_name, period, bus, vehicle_state=vehicle_state)
+        t = SimThread(
+            db, msg_name, period, bus, vehicle_state=vehicle_state, fault_state=fault_state
+        )
         threads.append(t)
         t.start()
     # Each listener gets its own bus instance: a single python-can Bus's
     # recv() queue is consumed once per message, so threads sharing one
     # instance would silently steal frames from each other rather than each
     # seeing every frame.
-    obd_t = OBDResponderThread(make_bus(settings.can_interface, settings.can_channel))
+    obd_t = OBDResponderThread(
+        make_bus(settings.can_interface, settings.can_channel), fault_state=fault_state
+    )
     obd_t.start()
     diag_t = DiagnosticResponderThread(
         db, make_bus(settings.can_interface, settings.can_channel)
     )
     diag_t.start()
+    fault_t = FaultListenerThread(
+        fault_state, make_bus(settings.can_interface, settings.can_channel)
+    )
+    fault_t.start()
     logger.info(
-        "ECU simulation running (%d profile threads + OBD + diagnostics). Press Ctrl-C to exit.",
+        "ECU simulation running (%d profile threads + OBD + diagnostics + faults). "
+        "Press Ctrl-C to exit.",
         len(threads),
     )
     try:

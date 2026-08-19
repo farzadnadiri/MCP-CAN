@@ -78,15 +78,15 @@ With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard
 ## Available MCP Tools & Resources
 | Name | Type | Description |
 |---|---|---|
-| `read_can_frames` | tool | Raw frames seen over `duration_s` seconds. |
+| `read_can_frames` | tool | Raw frames from the last `duration_s` seconds. Returns instantly (served from a continuously-running history buffer, not a fresh listen window). |
 | `decode_can_frame` | tool | Decode one frame's bytes into named signals. |
 | `filter_frames` | tool | Like `read_can_frames`, filtered by arbitration ID and/or signal. |
-| `monitor_signal` | tool | Timestamped samples of one decoded signal. |
+| `monitor_signal` | tool | Timestamped samples of one decoded signal, from the same history buffer. |
 | `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
 | `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
 | `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
 
-Every tool call opens a fresh listen window; `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s) so a client can't tie up a listener indefinitely. All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
+`read_can_frames`/`filter_frames`/`monitor_signal` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener — they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
 
 ### About the diagnostic responder
 `vehicle.dbc` defines a UDS-like diagnostic schema — `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU — but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED` — see `diagnostics.py::handle_service`.

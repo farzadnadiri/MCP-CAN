@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import can
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import FastMCP
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -23,7 +23,7 @@ from ..diagnostics import (
     response_code_name,
 )
 from ..obd import build_request, decode_pid_value, parse_response
-from .live_state import LiveState
+from .live_state import DEFAULT_HISTORY_WINDOW_S, LiveState
 from .schemas import (
     DecodeResult,
     DiagnosticEcuResponse,
@@ -45,7 +45,12 @@ def create_app() -> FastMCP:
     settings = get_settings()
     mcp = FastMCP("Vehicle CAN MCP")
     db = load_dbc(settings.dbc_path)
-    live_state = LiveState(db, settings.can_interface, settings.can_channel)
+    live_state = LiveState(
+        db,
+        settings.can_interface,
+        settings.can_channel,
+        history_window_s=max(settings.max_duration_s, DEFAULT_HISTORY_WINDOW_S),
+    )
     live_state.start()
 
     def _capped_duration(duration_s: float) -> float:
@@ -59,33 +64,22 @@ def create_app() -> FastMCP:
         return duration_s
 
     @mcp.tool()
-    async def read_can_frames(
-        duration_s: float = 1.0,
-        ctx: Context | None = None,
-    ) -> List[FrameOut]:
-        """Listen on the CAN bus for `duration_s` seconds and return every raw frame seen."""
+    def read_can_frames(duration_s: float = 1.0) -> List[FrameOut]:
+        """Return every raw frame seen in the last `duration_s` seconds.
+
+        Served from the server's continuously-running frame history buffer,
+        so it returns immediately (no waiting) and won't miss frames sent
+        between calls -- unlike opening a fresh bus listener per call."""
         duration_s = _capped_duration(duration_s)
-        bus = make_bus(settings.can_interface, settings.can_channel)
-        try:
-            frames: List[FrameOut] = []
-            end = time.time() + duration_s
-            count = 0
-            while time.time() < end:
-                msg = bus.recv(timeout=0.1)
-                if msg:
-                    frames.append(
-                        FrameOut(
-                            timestamp=msg.timestamp,
-                            arbitration_id=hex(msg.arbitration_id),
-                            data=list(msg.data),
-                        )
-                    )
-                    count += 1
-                    if ctx:
-                        await ctx.report_progress(count)
-            return frames
-        finally:
-            shutdown_bus(bus)
+        since = time.time() - duration_s
+        return [
+            FrameOut(
+                timestamp=f["timestamp"],
+                arbitration_id=hex(f["arbitration_id"]),
+                data=f["data"],
+            )
+            for f in live_state.frames_since(since)
+        ]
 
     @mcp.tool()
     def decode_can_frame(arbitration_id: int, data: List[int]) -> DecodeResult:
@@ -97,85 +91,61 @@ def create_app() -> FastMCP:
             return DecodeResult(status="error", message=str(e))
 
     @mcp.tool()
-    async def filter_frames(
+    def filter_frames(
         arbitration_id: Optional[int] = None,
         signal_name: Optional[str] = None,
         duration_s: float = 1.0,
-        ctx: Context | None = None,
     ) -> List[FrameOut]:
-        """Listen for `duration_s` seconds, keeping only frames matching the given
-        arbitration_id and/or containing signal_name once decoded."""
+        """Frames from the last `duration_s` seconds matching the given
+        arbitration_id and/or containing signal_name once decoded. Served
+        from the frame history buffer -- see `read_can_frames`."""
         duration_s = _capped_duration(duration_s)
-        bus = make_bus(settings.can_interface, settings.can_channel)
-        try:
-            end = time.time() + duration_s
-            results: List[FrameOut] = []
-            count = 0
-            while time.time() < end:
-                msg = bus.recv(timeout=0.1)
-                if msg:
-                    if arbitration_id is not None and msg.arbitration_id != arbitration_id:
-                        continue
-                    if signal_name:
-                        try:
-                            decoded = decode_frame(db, msg.arbitration_id, msg.data)
-                            if signal_name in decoded:
-                                results.append(
-                                    FrameOut(
-                                        timestamp=msg.timestamp,
-                                        arbitration_id=hex(msg.arbitration_id),
-                                        data=list(msg.data),
-                                        signal_name=signal_name,
-                                        signal_value=decoded[signal_name],
-                                    )
-                                )
-                        except Exception:
-                            pass
-                    else:
-                        results.append(
-                            FrameOut(
-                                timestamp=msg.timestamp,
-                                arbitration_id=hex(msg.arbitration_id),
-                                data=list(msg.data),
-                            )
-                        )
-                    count += 1
-                    if ctx:
-                        await ctx.report_progress(count)
-            return results
-        finally:
-            shutdown_bus(bus)
+        since = time.time() - duration_s
+        results: List[FrameOut] = []
+        for f in live_state.frames_since(since):
+            if arbitration_id is not None and f["arbitration_id"] != arbitration_id:
+                continue
+            if signal_name:
+                try:
+                    decoded = decode_frame(db, f["arbitration_id"], bytes(f["data"]))
+                except Exception:
+                    continue
+                if signal_name not in decoded:
+                    continue
+                results.append(
+                    FrameOut(
+                        timestamp=f["timestamp"],
+                        arbitration_id=hex(f["arbitration_id"]),
+                        data=f["data"],
+                        signal_name=signal_name,
+                        signal_value=decoded[signal_name],
+                    )
+                )
+            else:
+                results.append(
+                    FrameOut(
+                        timestamp=f["timestamp"],
+                        arbitration_id=hex(f["arbitration_id"]),
+                        data=f["data"],
+                    )
+                )
+        return results
 
     @mcp.tool()
-    async def monitor_signal(
-        signal_name: str,
-        duration_s: float = 2.0,
-        ctx: Context | None = None,
-    ) -> List[SignalSample]:
-        """Watch one decoded signal for `duration_s` seconds and return timestamped samples."""
+    def monitor_signal(signal_name: str, duration_s: float = 2.0) -> List[SignalSample]:
+        """Timestamped samples of one decoded signal over the last `duration_s`
+        seconds. Served from the frame history buffer -- see `read_can_frames`."""
         duration_s = _capped_duration(duration_s)
-        bus = make_bus(settings.can_interface, settings.can_channel)
-        try:
-            end = time.time() + duration_s
-            results: List[SignalSample] = []
-            count = 0
-            while time.time() < end:
-                msg = bus.recv(timeout=0.1)
-                if msg:
-                    try:
-                        decoded = decode_frame(db, msg.arbitration_id, msg.data)
-                        if signal_name in decoded:
-                            results.append(
-                                SignalSample(timestamp=msg.timestamp, value=decoded[signal_name])
-                            )
-                            count += 1
-                            if ctx:
-                                await ctx.report_progress(count)
-                    except Exception:
-                        pass
-            return results
-        finally:
-            shutdown_bus(bus)
+        since = time.time() - duration_s
+        results: List[SignalSample] = []
+        for f in live_state.frames_since(since):
+            try:
+                decoded = decode_frame(db, f["arbitration_id"], bytes(f["data"]))
+            except Exception:
+                continue
+            if signal_name in decoded:
+                results.append(SignalSample(timestamp=f["timestamp"], value=decoded[signal_name]))
+        return results
 
     @mcp.tool()
     def send_obd_request(

@@ -54,7 +54,16 @@ only thing that catches wiring/transport-level regressions.
   logic, no MCP or CLI awareness. New protocol behavior belongs here, not in
   `server/` or `cli.py`.
 - `src/mcp_can/server/fastmcp_server.py` — MCP tool/resource definitions;
-  `server/schemas.py` — the Pydantic models those tools return.
+  `server/schemas.py` — the Pydantic models those tools return;
+  `server/live_state.py` — the single background listener backing both the
+  passive-listening tools (`read_can_frames`/`filter_frames`/`monitor_signal`)
+  and the `/dashboard` SSE stream. Passive tools should query
+  `live_state.frames_since(...)`, not open their own bus connection — that
+  used to be a real reliability bug (frames dropped between calls, or stolen
+  by a competing listener on the same bus instance). Request/response tools
+  (`send_obd_request`, `send_diagnostic_request`) are the exception: they
+  genuinely need to send something and wait for a specific reply, so they
+  still open their own short-lived `make_bus()` instance.
 - `src/mcp_can/simulator/runner.py` — the ECU simulator threads
   (`SimThread`, `OBDResponderThread`, `DiagnosticResponderThread`). Each
   bus *listener* thread needs its **own** `make_bus(...)` instance — a
@@ -71,10 +80,13 @@ only thing that catches wiring/transport-level regressions.
 1. Add the protocol logic (encode/decode/whatever) to a plain module first —
    testable without any bus or MCP machinery.
 2. Add a Pydantic return model to `server/schemas.py`.
-3. Register the tool in `server/fastmcp_server.py::create_app()`, following
-   the existing tools' shape (open a bus with `make_bus()`, always
-   `shutdown_bus()` in a `finally`, cap any `duration_s`/`timeout_s` against
-   `settings.max_duration_s`).
+3. Register the tool in `server/fastmcp_server.py::create_app()`. If it's
+   passively watching traffic, read from `live_state.frames_since(...)`
+   (see `read_can_frames` for the pattern) rather than opening a bus
+   connection. If it sends something and waits for a specific reply, open
+   its own bus with `make_bus()` and always `shutdown_bus()` in a `finally`
+   (see `send_obd_request`). Either way, cap any `duration_s`/`timeout_s`
+   against `settings.max_duration_s`.
 4. If the CLI should expose the same capability, mirror it as a Typer
    command in `cli.py`.
 5. Add a test: pure-logic tests belong next to the module they test (see

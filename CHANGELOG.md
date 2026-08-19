@@ -56,3 +56,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `mcp-can server`/`mcp-can simulate` are the one canonical entrypoint.
 - Removed dead code (`models.FrameView`/`frame_to_view`, unused since
   introduction).
+- `read_can_frames`, `filter_frames`, `monitor_signal` no longer open a
+  fresh bus listener per call (each racing the risk of missing frames sent
+  between calls, or being stolen by a competing listener on a shared bus
+  instance). They now read from `live_state.py`'s continuously-running
+  frame history buffer — same background listener that backs the
+  dashboard — so they return near-instantly instead of blocking for
+  `duration_s`, and no longer accept a `ctx` progress-reporting parameter
+  (there's no longer a live poll loop to report progress on).

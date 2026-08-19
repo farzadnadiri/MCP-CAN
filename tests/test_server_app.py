@@ -1,6 +1,9 @@
 import asyncio
+import json
 import os
+import time
 
+import can
 from starlette.testclient import TestClient
 
 from mcp_can.server.fastmcp_server import create_app
@@ -45,3 +48,34 @@ def test_healthz_and_dashboard_routes():
     assert dashboard.status_code == 200
     assert "text/html" in dashboard.headers["content-type"]
     assert "MCP-CAN Live Dashboard" in dashboard.text
+
+
+def test_read_can_frames_served_from_history_buffer():
+    # create_app() starts LiveState's listener on the same virtual channel;
+    # a frame sent from an independent bus instance should still show up in
+    # read_can_frames -- proving the tool reads the shared history buffer
+    # rather than racing its own (now-removed) fresh bus connection.
+    app = _make_app()
+    time.sleep(0.2)  # let the listener thread come up
+
+    sender = can.ThreadSafeBus(interface="virtual", channel="bus0")
+    try:
+        sender.send(
+            can.Message(
+                arbitration_id=0x100,
+                data=[1, 2, 3, 4, 5, 6, 7, 8],
+                is_extended_id=False,
+            )
+        )
+        time.sleep(0.3)  # let the listener pick it up
+    finally:
+        sender.shutdown()
+
+    result = asyncio.run(app.call_tool("read_can_frames", {"duration_s": 5.0}))
+    # FastMCP emits one content block per returned list item, not one block
+    # containing a JSON array.
+    frames = [json.loads(block.text) for block in result]
+    assert any(
+        f["arbitration_id"] == "0x100" and f["data"] == [1, 2, 3, 4, 5, 6, 7, 8]
+        for f in frames
+    )

@@ -34,6 +34,7 @@ def test_expected_tools_are_registered():
         "send_obd_request",
         "send_diagnostic_request",
         "get_vehicle_snapshot",
+        "activate_fault_scenario",
     }.issubset(names)
 
 
@@ -49,6 +50,28 @@ def test_healthz_and_dashboard_routes():
     assert dashboard.status_code == 200
     assert "text/html" in dashboard.headers["content-type"]
     assert "MCP-CAN Live Dashboard" in dashboard.text
+
+
+def test_cors_defaults_to_wildcard_without_credentials():
+    app = _make_app()
+    client = TestClient(app.sse_app())
+    resp = client.get("/healthz", headers={"Origin": "http://example.com"})
+    assert resp.headers.get("access-control-allow-origin") == "*"
+    # Wildcard origin + allow_credentials is a combination browsers reject
+    # outright, so the middleware shouldn't be asked to send it at all.
+    assert "access-control-allow-credentials" not in resp.headers
+
+
+def test_cors_allows_credentials_once_origins_are_narrowed():
+    os.environ["MCP_CAN_CORS_ALLOW_ORIGINS"] = '["http://example.com"]'
+    try:
+        app = _make_app()
+        client = TestClient(app.sse_app())
+        resp = client.get("/healthz", headers={"Origin": "http://example.com"})
+        assert resp.headers.get("access-control-allow-origin") == "http://example.com"
+        assert resp.headers.get("access-control-allow-credentials") == "true"
+    finally:
+        del os.environ["MCP_CAN_CORS_ALLOW_ORIGINS"]
 
 
 def test_read_can_frames_served_from_history_buffer():

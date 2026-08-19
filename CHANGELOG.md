@@ -6,6 +6,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `Settings.cors_allow_origins` (default `["*"]`, override via
+  `MCP_CAN_CORS_ALLOW_ORIGINS`) so the SSE endpoint's CORS origins are
+  configurable instead of hardcoded.
 - Fault injection (`simulator/faults.py`): three named scenario presets
   (`overheat`, `abs_fault`, `low_fuel`) that force specific signals to
   fault-condition values and, where applicable, populate a matching DTC
@@ -85,6 +88,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a `mount_path` argument the patch didn't accept.
 
 ### Changed
+- CORS no longer sends `allow_credentials=True` unconditionally: it's now
+  tied to `Settings.cors_allow_origins` and only enabled once that's
+  narrowed away from the default `"*"`, since browsers reject the
+  wildcard-origin + credentials combination outright anyway.
 - `requires-python` corrected from `>=3.8` to `>=3.10` (the code already
   used `X | None` union syntax that only works natively on 3.10+).
 - Removed redundant `mcp-can-server`/`mcp-can-sim` console-script entries —

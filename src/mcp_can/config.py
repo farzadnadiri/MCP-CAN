@@ -1,5 +1,5 @@
 import logging
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     mcp_transport: Literal["sse", "streamable-http", "stdio"] = "sse"
     max_duration_s: float = 30.0
     log_level: str = "INFO"
+    # Wildcard by default for the zero-friction demo experience (e.g. MCP
+    # Inspector connecting from a browser); override before any real
+    # deployment. Credentialed CORS is only enabled once this is narrowed to
+    # specific origins -- allow_credentials=True with a wildcard origin is a
+    # combination browsers reject outright, so it's never turned on for "*".
+    cors_allow_origins: List[str] = ["*"]
 
     model_config = SettingsConfigDict(
         env_prefix="MCP_CAN_",

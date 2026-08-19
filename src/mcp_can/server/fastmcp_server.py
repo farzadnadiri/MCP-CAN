@@ -386,8 +386,15 @@ def create_app() -> FastMCP:
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    # Enable permissive CORS so browser-based MCP hosts (Inspector) can reach SSE.
+    # CORS so browser-based MCP hosts (Inspector) can reach SSE. Origins
+    # default to "*" for the zero-friction demo experience; see
+    # Settings.cors_allow_origins. Credentials are only allowed once that's
+    # narrowed to specific origins -- wildcard-origin + allow_credentials is
+    # a combination browsers reject outright, so enabling it for "*" would
+    # just be a sloppy default with no actual browser benefit.
     original_sse_app = mcp.sse_app
+    cors_origins = settings.cors_allow_origins
+    cors_credentials = cors_origins != ["*"]
 
     def _cors_sse_app(self: FastMCP, *args: Any, **kwargs: Any):
         # Forward args/kwargs as-is: FastMCP.sse_app()'s signature has changed
@@ -396,10 +403,10 @@ def create_app() -> FastMCP:
         app = original_sse_app(*args, **kwargs)
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=cors_origins,
             allow_methods=["*"],
             allow_headers=["*"],
-            allow_credentials=True,
+            allow_credentials=cors_credentials,
         )
         return app
 

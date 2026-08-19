@@ -164,6 +164,7 @@ Env vars (prefix `MCP_CAN_`):
 - `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK; the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
 - `MAX_DURATION_S` (default `30.0`) – caps every tool's `duration_s`/`timeout_s`
 - `LOG_LEVEL` (default `INFO`)
+- `CORS_ALLOW_ORIGINS` (default `["*"]`, JSON array e.g. `["https://your-host.example"]`) – allowed browser origins for the SSE endpoint. Credentialed requests (`allow_credentials`) are only enabled once this is narrowed to specific origins; wildcard + credentials is a combination browsers reject outright, so it's never turned on for the default `"*"`. Override before any real deployment.
 
 You can set these in a `.env` file at repo root.
 

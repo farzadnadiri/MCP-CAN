@@ -162,6 +162,57 @@ def monitor(
         shutdown_bus(bus)
 
 
+@app.command()
+def snapshot(
+    seconds: float = typer.Option(1.0, help="How long to listen before reporting"),
+    json_output: bool = typer.Option(False, "--json", help="Print raw JSON instead of a table"),
+) -> None:
+    """Listen briefly and report the latest value seen for every signal.
+
+    CLI counterpart to the `get_vehicle_snapshot` MCP tool -- since this runs
+    as its own process rather than inside the server, it builds its own
+    short-lived snapshot instead of reading the server's history buffer.
+    """
+    settings = get_settings()
+    db = load_dbc(settings.dbc_path)
+    bus = make_bus(settings.can_interface, settings.can_channel)
+    latest: dict = {}
+    end = _time.time() + seconds
+    try:
+        while _time.time() < end:
+            msg = bus.recv(timeout=0.1)
+            if msg:
+                try:
+                    decoded = decode_frame(db, msg.arbitration_id, msg.data)
+                    message = db.get_message_by_frame_id(msg.arbitration_id)
+                except Exception:
+                    continue
+                unit_by_name = {sig.name: sig.unit for sig in message.signals}
+                for name, value in decoded.items():
+                    latest[name] = {
+                        "value": value,
+                        "unit": unit_by_name.get(name) or "",
+                        "message": message.name,
+                    }
+        if json_output:
+            typer.echo(json.dumps(latest, indent=2, default=str))
+            return
+        if not latest:
+            console.print("[yellow]No signals observed.[/yellow]")
+            return
+        table = Table(title=f"Vehicle Snapshot (last {seconds}s)")
+        table.add_column("Signal")
+        table.add_column("Value")
+        table.add_column("Unit")
+        table.add_column("Message")
+        for name in sorted(latest):
+            info = latest[name]
+            table.add_row(name, str(info["value"]), info["unit"] or "-", info["message"])
+        console.print(table)
+    finally:
+        shutdown_bus(bus)
+
+
 @app.command("dbc-info")
 def dbc_info_cmd(
     message: Optional[str] = typer.Argument(None, help="Show only this message's signals"),

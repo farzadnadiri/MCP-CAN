@@ -31,6 +31,8 @@ from .schemas import (
     FrameOut,
     ObdResponse,
     SignalSample,
+    SignalState,
+    VehicleSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,28 @@ def create_app() -> FastMCP:
             if signal_name in decoded:
                 results.append(SignalSample(timestamp=f["timestamp"], value=decoded[signal_name]))
         return results
+
+    @mcp.tool()
+    def get_vehicle_snapshot() -> VehicleSnapshot:
+        """The last known value of every signal seen so far (one entry per
+        signal, not per frame) -- a single-call overview of current vehicle
+        state instead of decoding a stream of raw frames yourself. `age_s`
+        is how long ago that value was last updated; a large `age_s` means
+        that ECU/message hasn't been seen recently."""
+        raw = live_state.snapshot()
+        now = time.time()
+        signals = {
+            name: SignalState(
+                value=info["value"],
+                unit=info["unit"],
+                message=info["message"],
+                age_s=round(now - info["timestamp"], 2),
+            )
+            for name, info in raw["signals"].items()
+        }
+        return VehicleSnapshot(
+            signals=signals, frame_count=raw["frame_count"], uptime_s=raw["uptime_s"]
+        )
 
     @mcp.tool()
     def send_obd_request(

@@ -82,6 +82,7 @@ With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard
 | `decode_can_frame` | tool | Decode one frame's bytes into named signals. |
 | `filter_frames` | tool | Like `read_can_frames`, filtered by arbitration ID and/or signal. |
 | `monitor_signal` | tool | Timestamped samples of one decoded signal, from the same history buffer. |
+| `get_vehicle_snapshot` | tool | Last known value of every signal seen so far, one entry per signal (not per frame) with an `age_s` freshness indicator — a single-call overview instead of decoding a frame stream yourself. |
 | `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
 | `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
 | `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
@@ -131,6 +132,7 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 - `mcp-can demo [--port] [--transport]` – simulator + server in one process.
 - `mcp-can frames --seconds 1.0` – capture raw frames as JSON.
 - `mcp-can decode <id> <data> [--json]` – decode a single frame (table by default; `id` hex/decimal, `data` space/comma-separated bytes).
+- `mcp-can snapshot --seconds 1.0 [--json]` – latest value of every signal seen while listening.
 - `mcp-can dbc-info [message]` – table of every message/signal in the DBC, or just one message's.
 - `mcp-can monitor <signal> --seconds 2.0 [--json]` – watch one signal (live output by default).
 - `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – OBD-II request; response includes a decoded value for known PIDs.

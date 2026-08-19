@@ -33,6 +33,7 @@ def test_expected_tools_are_registered():
         "monitor_signal",
         "send_obd_request",
         "send_diagnostic_request",
+        "get_vehicle_snapshot",
     }.issubset(names)
 
 
@@ -79,3 +80,11 @@ def test_read_can_frames_served_from_history_buffer():
         f["arbitration_id"] == "0x100" and f["data"] == [1, 2, 3, 4, 5, 6, 7, 8]
         for f in frames
     )
+
+    # arbitration_id 0x100 is ENGINE_STATUS in vehicle.dbc, so the same
+    # frame should also have updated get_vehicle_snapshot's signal state.
+    snap_result = asyncio.run(app.call_tool("get_vehicle_snapshot", {}))
+    snapshot = json.loads(snap_result[0].text)
+    assert "ENGINE_SPEED" in snapshot["signals"]
+    assert snapshot["signals"]["ENGINE_SPEED"]["message"] == "ENGINE_STATUS"
+    assert snapshot["frame_count"] >= 1

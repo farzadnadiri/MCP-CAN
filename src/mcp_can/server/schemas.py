@@ -51,3 +51,16 @@ class DiagnosticResult(BaseModel):
     status: str
     responses: List[DiagnosticEcuResponse] = Field(default_factory=list)
     message: Optional[str] = None
+
+
+class SignalState(BaseModel):
+    value: Any
+    unit: str
+    message: str
+    age_s: float
+
+
+class VehicleSnapshot(BaseModel):
+    signals: Dict[str, SignalState]
+    frame_count: int
+    uptime_s: float

@@ -6,6 +6,12 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `get_vehicle_snapshot` MCP tool (plus `mcp-can snapshot` CLI command):
+  the last known value of every signal seen so far, one entry per signal
+  with an `age_s` freshness indicator, instead of decoding a stream of raw
+  frames yourself. Built on top of the frame history buffer's signal
+  tracking (`live_state.py`), so it's effectively free given that already
+  existed for the dashboard.
 - Read-only live web dashboard at `/dashboard` (`server/live_state.py` +
   `server/templates/dashboard.html`): signal values grouped by ECU message
   and a recent-frames feed, updated over Server-Sent Events. Self-contained

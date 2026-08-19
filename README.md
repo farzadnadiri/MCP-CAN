@@ -59,8 +59,8 @@ mcp-can demo --port 6278
 Sample interactions:
 ```bash
 mcp-can frames --seconds 2
-mcp-can decode --id 0x100 --data "01 02 03 04 05 06 07 08"
-mcp-can monitor --signal ENGINE_SPEED --seconds 3
+mcp-can decode 0x100 "01 02 03 04 05 06 07 08"
+mcp-can monitor ENGINE_SPEED --seconds 3
 mcp-can obd-request --service 0x01 --pid 0x0D
 ```
 
@@ -104,8 +104,8 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 - `mcp-can simulate` – start ECU simulator using `vehicle.dbc`.
 - `mcp-can server [--port 6278]` – run MCP SSE server.
 - `mcp-can frames --seconds 1.0` – capture raw frames as JSON.
-- `mcp-can decode --id <hex|int> --data <bytes>` – decode a single frame.
-- `mcp-can monitor --signal <NAME> --seconds 2.0` – watch one signal.
+- `mcp-can decode <id> <data>` – decode a single frame (`id` hex/decimal, `data` space/comma-separated bytes).
+- `mcp-can monitor <signal> --seconds 2.0` – watch one signal.
 - `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – demo OBD-II request.
 
 ## Configuration

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 OBD_BROADCAST_ID = 0x7DF
 OBD_RESPONSE_BASE_ID = 0x7E8  # first ECU response ID
@@ -70,7 +70,7 @@ def simulate_response(service: int, pid: Optional[int]) -> Optional[List[int]]:
     return None
 
 
-def parse_request(data: bytes) -> Tuple[int, Optional[int]]:
+def parse_request(data: Union[bytes, bytearray]) -> Tuple[int, Optional[int]]:
     """Parse a single-frame request and return (service, pid)."""
     if not data:
         return (0, None)

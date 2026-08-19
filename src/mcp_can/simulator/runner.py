@@ -8,6 +8,7 @@ import cantools
 
 from ..bus import make_bus
 from ..config import get_settings
+from ..dbc import load_dbc
 from ..obd import OBD_BROADCAST_ID, build_response_frame, parse_request, simulate_response
 from .profiles import DEFAULT_PROFILE
 
@@ -57,33 +58,34 @@ class SimThread(threading.Thread):
             time.sleep(self.period)
 
 
+class OBDResponderThread(threading.Thread):
+    def __init__(self, bus: can.BusABC):
+        super().__init__(daemon=True)
+        self.bus = bus
+
+    def run(self) -> None:
+        while True:
+            msg = self.bus.recv(timeout=0.1)
+            if msg and msg.arbitration_id == OBD_BROADCAST_ID and len(msg.data) > 0:
+                service, pid = parse_request(msg.data)
+                payload = simulate_response(service, pid)
+                if payload is not None:
+                    try:
+                        arb_id, data = build_response_frame(payload)
+                        resp = can.Message(
+                            arbitration_id=arb_id,
+                            data=data,
+                            is_extended_id=False,
+                        )
+                        self.bus.send(resp)
+                    except Exception as e:
+                        print(f"OBD responder error: {e}")
+
+
 def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
     settings = get_settings()
-    db = cantools.database.load_file(settings.dbc_path)
+    db = load_dbc(settings.dbc_path)
     bus = make_bus(settings.can_interface, settings.can_channel)
-    # OBD-II responder
-    class OBDResponderThread(threading.Thread):
-        def __init__(self, bus: can.BusABC):
-            super().__init__(daemon=True)
-            self.bus = bus
-
-        def run(self) -> None:
-            while True:
-                msg = self.bus.recv(timeout=0.1)
-                if msg and msg.arbitration_id == OBD_BROADCAST_ID and len(msg.data) > 0:
-                    service, pid = parse_request(msg.data)
-                    payload = simulate_response(service, pid)
-                    if payload is not None:
-                        try:
-                            arb_id, data = build_response_frame(payload)
-                            resp = can.Message(
-                                arbitration_id=arb_id,
-                                data=data,
-                                is_extended_id=False,
-                            )
-                            self.bus.send(resp)
-                        except Exception as e:
-                            print(f"OBD responder error: {e}")
     threads: List[SimThread] = []
     for msg_name, period in profile:
         t = SimThread(db, msg_name, period, bus)

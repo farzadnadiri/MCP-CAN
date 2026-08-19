@@ -12,7 +12,7 @@ def make_bus(interface: str, channel: str) -> can.BusABC:
         return can.ThreadSafeBus(interface=interface, channel=channel)
     except Exception:
         # Fallback to standard Bus if ThreadSafeBus not available or fails
-        return can.interface.Bus(interface=interface, channel=channel)  # type: ignore[arg-type]
+        return can.interface.Bus(interface=interface, channel=channel)
 
 
 def read_frames(bus: can.BusABC, duration_s: float = 1.0) -> List[Frame]:

@@ -133,7 +133,7 @@ def create_app() -> FastMCP:
             info['nodes'] = [node.name for node in db.nodes]
             messages_info = []
             for msg in db.messages:
-                message_details = {
+                message_details: Dict[str, Any] = {
                     'name': msg.name,
                     'id': msg.frame_id,
                     'id_hex': hex(msg.frame_id),
@@ -181,8 +181,11 @@ def create_app() -> FastMCP:
     # Enable permissive CORS so browser-based MCP hosts (Inspector) can reach SSE.
     original_sse_app = mcp.sse_app
 
-    def _cors_sse_app(self: FastMCP):
-        app = original_sse_app()
+    def _cors_sse_app(self: FastMCP, *args: Any, **kwargs: Any):
+        # Forward args/kwargs as-is: FastMCP.sse_app()'s signature has changed
+        # across mcp SDK versions (e.g. an added `mount_path` param), so this
+        # stays compatible without pinning to one exact shape.
+        app = original_sse_app(*args, **kwargs)
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -192,7 +195,7 @@ def create_app() -> FastMCP:
         )
         return app
 
-    mcp.sse_app = types.MethodType(_cors_sse_app, mcp)
+    mcp.sse_app = types.MethodType(_cors_sse_app, mcp)  # type: ignore[method-assign]
 
     return mcp
 

@@ -1,6 +1,8 @@
 import asyncio
 import os
 
+from starlette.testclient import TestClient
+
 from mcp_can.server.fastmcp_server import create_app
 
 
@@ -29,3 +31,17 @@ def test_expected_tools_are_registered():
         "send_obd_request",
         "send_diagnostic_request",
     }.issubset(names)
+
+
+def test_healthz_and_dashboard_routes():
+    app = _make_app()
+    client = TestClient(app.sse_app())
+
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.json()["dbc_loaded"] is True
+
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+    assert "text/html" in dashboard.headers["content-type"]
+    assert "MCP-CAN Live Dashboard" in dashboard.text

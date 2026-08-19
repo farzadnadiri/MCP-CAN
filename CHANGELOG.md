@@ -6,6 +6,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Read-only live web dashboard at `/dashboard` (`server/live_state.py` +
+  `server/templates/dashboard.html`): signal values grouped by ECU message
+  and a recent-frames feed, updated over Server-Sent Events. Self-contained
+  single page, no build step or external assets.
 - UDS-style diagnostic responder (`DiagnosticResponderThread`) implementing
   the `DIAGNOSTIC_REQUEST`/`DIAGNOSTIC_RESPONSE_*` messages `vehicle.dbc`
   already defined but nothing previously answered.

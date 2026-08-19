@@ -11,6 +11,7 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
 - ECU simulator that streams multiple messages, plus OBD-II and UDS-style diagnostic responders.
 - Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request).
 - Structured tool output (typed Pydantic models), duration-capped tool calls, `/healthz`, colorized logging.
+- Read-only live web dashboard (`/dashboard`) — signal values and recent frames, updated over SSE.
 - Dockerfile + docker compose for server + simulator.
 - Unit tests, type hints, lint config (ruff, mypy) — see `CONTRIBUTING.md`.
 
@@ -24,8 +25,10 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
   - `config.py` – env settings (`MCP_CAN_*`) + logging setup
   - `models.py` – internal bus-layer dataclass (`Frame`)
   - `simulator/runner.py` – ECU simulator + OBD/diagnostic responders
-  - `server/fastmcp_server.py` – MCP tools/resources
+  - `server/fastmcp_server.py` – MCP tools/resources + dashboard routes
   - `server/schemas.py` – Pydantic models for MCP tool structured output
+  - `server/live_state.py` – background bus listener backing the dashboard
+  - `server/templates/dashboard.html` – the dashboard page itself
 - `vehicle.dbc` – sample CAN database (incl. a UDS-like diagnostic schema)
 - `simulate-ecus.py`, `can-mcp.py` – standalone run-without-installing entrypoints
 - `docker/compose.yml`, `Dockerfile`
@@ -68,6 +71,9 @@ mcp-can monitor ENGINE_SPEED --seconds 3
 mcp-can obd-request --service 0x01 --pid 0x0D
 mcp-can diag-request --service-id 0x22 --parameter-id 0x05   # READ_DATA_BY_ID
 ```
+
+## Live Dashboard
+With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard` in a browser: live signal values grouped by ECU message, and a scrolling feed of recent frames, updating ~2x/second over Server-Sent Events. It's read-only (view only, no controls to send frames) and self-contained — no build step, no external assets, works offline. Like everything bus-related here, it only shows data when the simulator shares the *same process* as the server (`mcp-can demo`); pointed at a bare `mcp-can server` with no simulator, it just shows "waiting for CAN traffic."
 
 ## Available MCP Tools & Resources
 | Name | Type | Description |

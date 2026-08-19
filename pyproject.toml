@@ -40,5 +40,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "mcp_can" = ["py.typed"]
+"mcp_can.server" = ["templates/*.html"]
 
 

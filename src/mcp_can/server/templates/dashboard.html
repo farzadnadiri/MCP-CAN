@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP-CAN Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151d;
+    --panel-border: #232838;
+    --text: #e6e9f0;
+    --text-dim: #8892a6;
+    --accent: #5eead4;
+    --accent-dim: #1f4d47;
+    --ok: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --panel-border: #dfe3ea;
+      --text: #12151d;
+      --text-dim: #5b6472;
+      --accent: #0f766e;
+      --accent-dim: #d3f5ef;
+      --ok: #16a34a;
+      --bad: #dc2626;
+      --warn: #b45309;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--panel-border);
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  header h1 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  header h1 .dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--bad);
+    display: inline-block;
+    transition: background 0.3s;
+  }
+  header h1 .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .stats {
+    display: flex;
+    gap: 1.25rem;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .stats b { color: var(--text); font-weight: 600; }
+  main {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding: 1.25rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  @media (min-width: 900px) {
+    main { grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr); align-items: start; }
+  }
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  section.panel > h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  #groups { display: flex; flex-direction: column; gap: 1rem; }
+  .group-card > h2 { display: flex; justify-content: space-between; align-items: center; }
+  .group-card > h2 .msg-id { color: var(--accent); font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  td, th {
+    padding: 0.5rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  tr:last-child td { border-bottom: none; }
+  th {
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td.value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  td.unit { color: var(--text-dim); }
+  tr.stale td.value { color: var(--text-dim); font-weight: 400; }
+  #activity-list {
+    list-style: none;
+    margin: 0;
+    padding: 0.4rem 0;
+    max-height: 560px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  #activity-list li {
+    padding: 0.4rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--panel-border);
+  }
+  #activity-list li:last-child { border-bottom: none; }
+  #activity-list li .msg { color: var(--text); }
+  #activity-list li .id { color: var(--accent); }
+  .empty-state {
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+  .empty-state code {
+    background: var(--accent-dim);
+    color: var(--accent);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+  footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    padding: 1.5rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="live-dot"></span> MCP-CAN Live Dashboard</h1>
+  <div class="stats">
+    <span>frames: <b id="stat-frames">0</b></span>
+    <span>signals: <b id="stat-signals">0</b></span>
+    <span>uptime: <b id="stat-uptime">0s</b></span>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Live Signals</h2>
+    <div id="groups">
+      <div class="empty-state" id="empty-state">
+        Waiting for CAN traffic&hellip;<br><br>
+        This page only shows data while the simulator and server share a
+        virtual bus in the <strong>same process</strong> &mdash; start it with
+        <code>mcp-can demo</code>, not <code>mcp-can server</code> alone.
+      </div>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Recent Frames</h2>
+    <ul id="activity-list"></ul>
+  </section>
+</main>
+<footer>MCP-CAN &middot; read-only view, updates every ~0.5s over SSE</footer>
+<script>
+(function () {
+  var liveDot = document.getElementById("live-dot");
+  var groupsEl = document.getElementById("groups");
+  var emptyState = document.getElementById("empty-state");
+  var activityEl = document.getElementById("activity-list");
+  var statFrames = document.getElementById("stat-frames");
+  var statSignals = document.getElementById("stat-signals");
+  var statUptime = document.getElementById("stat-uptime");
+
+  function fmtUptime(s) {
+    if (s < 60) return s.toFixed(0) + "s";
+    var m = Math.floor(s / 60), rem = Math.round(s % 60);
+    return m + "m " + rem + "s";
+  }
+
+  function render(snapshot) {
+    statFrames.textContent = snapshot.frame_count;
+    statUptime.textContent = fmtUptime(snapshot.uptime_s);
+
+    var byMessage = {};
+    var names = Object.keys(snapshot.signals);
+    statSignals.textContent = names.length;
+    emptyState.style.display = names.length ? "none" : "block";
+
+    var now = Date.now() / 1000;
+    names.sort().forEach(function (name) {
+      var s = snapshot.signals[name];
+      (byMessage[s.message] = byMessage[s.message] || []).push({ name: name, info: s });
+    });
+
+    var messageNames = Object.keys(byMessage).sort();
+    groupsEl.querySelectorAll(".group-card").forEach(function (el) { el.remove(); });
+    messageNames.forEach(function (msgName) {
+      var card = document.createElement("div");
+      card.className = "group-card";
+      var rows = byMessage[msgName].map(function (sig) {
+        var age = now - sig.info.timestamp;
+        var stale = age > 3 ? " stale" : "";
+        return "<tr class=\"" + stale + "\"><td>" + sig.name + "</td>" +
+          "<td class=\"value\">" + sig.info.value + "</td>" +
+          "<td class=\"unit\">" + (sig.info.unit || "") + "</td></tr>";
+      }).join("");
+      card.innerHTML = "<h2>" + msgName + "</h2>" +
+        "<table><thead><tr><th>Signal</th><th>Value</th><th>Unit</th></tr></thead>" +
+        "<tbody>" + rows + "</tbody></table>";
+      groupsEl.appendChild(card);
+    });
+
+    activityEl.innerHTML = snapshot.activity.slice().reverse().map(function (a) {
+      return "<li><span class=\"msg\">" + a.message + "</span>" +
+        "<span class=\"id\">" + a.arbitration_id + "</span></li>";
+    }).join("");
+  }
+
+  function connect() {
+    var es = new EventSource("dashboard/stream");
+    es.onmessage = function (ev) {
+      liveDot.classList.add("live");
+      try { render(JSON.parse(ev.data)); } catch (e) { /* ignore malformed frame */ }
+    };
+    es.onerror = function () {
+      liveDot.classList.remove("live");
+      es.close();
+      setTimeout(connect, 1500);
+    };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

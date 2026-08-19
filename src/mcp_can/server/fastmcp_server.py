@@ -1,14 +1,17 @@
+import asyncio
+import json
 import logging
 import time
 import types
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import can
 from mcp.server.fastmcp import Context, FastMCP
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..bus import make_bus, shutdown_bus
 from ..config import configure_logging, get_settings
@@ -20,6 +23,7 @@ from ..diagnostics import (
     response_code_name,
 )
 from ..obd import build_request, decode_pid_value, parse_response
+from .live_state import LiveState
 from .schemas import (
     DecodeResult,
     DiagnosticEcuResponse,
@@ -31,12 +35,18 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
+_DASHBOARD_HTML = (Path(__file__).parent / "templates" / "dashboard.html").read_text(
+    encoding="utf-8"
+)
+
 
 def create_app() -> FastMCP:
     """Create a FastMCP server exposing CAN tools and DBC metadata."""
     settings = get_settings()
     mcp = FastMCP("Vehicle CAN MCP")
     db = load_dbc(settings.dbc_path)
+    live_state = LiveState(db, settings.can_interface, settings.can_channel)
+    live_state.start()
 
     def _capped_duration(duration_s: float) -> float:
         if duration_s > settings.max_duration_s:
@@ -321,6 +331,22 @@ def create_app() -> FastMCP:
             {"status": "ok" if healthy else "error", "dbc_loaded": has_messages},
             status_code=200 if healthy else 503,
         )
+
+    # Read-only live dashboard: a static page (below) polling this SSE stream.
+    # Only shows data when a simulator shares this process's virtual bus
+    # (i.e. `mcp-can demo`) -- see live_state.py.
+    @mcp.custom_route("/dashboard", methods=["GET"])
+    async def _dashboard(_: Request) -> HTMLResponse:
+        return HTMLResponse(_DASHBOARD_HTML)
+
+    @mcp.custom_route("/dashboard/stream", methods=["GET"])
+    async def _dashboard_stream(_: Request) -> StreamingResponse:
+        async def events() -> AsyncIterator[str]:
+            while True:
+                yield f"data: {json.dumps(live_state.snapshot())}\n\n"
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     # Enable permissive CORS so browser-based MCP hosts (Inspector) can reach SSE.
     original_sse_app = mcp.sse_app

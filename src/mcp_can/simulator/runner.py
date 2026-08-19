@@ -2,7 +2,7 @@ import logging
 import random
 import threading
 import time
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import can
 import cantools
@@ -13,6 +13,7 @@ from ..dbc import decode_frame, load_dbc, signal_int
 from ..diagnostics import REQUEST_MESSAGE, RESPONSE_MESSAGES, handle_service
 from ..obd import OBD_BROADCAST_ID, build_response_frame, parse_request, simulate_response
 from .profiles import DEFAULT_PROFILE
+from .state import CORRELATED_SIGNALS, VehicleState
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,14 @@ class SimThread(threading.Thread):
         msg_name: str,
         period: float,
         bus: can.BusABC,
+        vehicle_state: Optional[VehicleState] = None,
     ):
         super().__init__(daemon=True)
         self.db = db
         self.msg = db.get_message_by_name(msg_name)
         self.period = period
         self.bus = bus
+        self.vehicle_state = vehicle_state
 
     def _random_signal_value(self, sig: cantools.database.can.signal.Signal):
         if sig.choices:
@@ -45,10 +48,20 @@ class SimThread(threading.Thread):
         raw = max(0, min(raw, max_raw))
         return raw * sig.scale + sig.offset if sig.scale else raw
 
+    def _signal_value(self, sig: cantools.database.can.signal.Signal, driving_state):
+        if driving_state is not None and sig.name in CORRELATED_SIGNALS:
+            return CORRELATED_SIGNALS[sig.name](driving_state)
+        return self._random_signal_value(sig)
+
     def run(self):
         while True:
             try:
-                signals = {sig.name: self._random_signal_value(sig) for sig in self.msg.signals}
+                # Snapshot once per message, not once per signal, so every
+                # correlated signal in this frame reflects the same instant.
+                driving_state = self.vehicle_state.snapshot() if self.vehicle_state else None
+                signals = {
+                    sig.name: self._signal_value(sig, driving_state) for sig in self.msg.signals
+                }
                 data = self.msg.encode(signals)
                 can_msg = can.Message(
                     arbitration_id=self.msg.frame_id,
@@ -136,9 +149,11 @@ def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
     settings = get_settings()
     db = load_dbc(settings.dbc_path)
     bus = make_bus(settings.can_interface, settings.can_channel)
+    vehicle_state = VehicleState()
+    vehicle_state.start()
     threads: List[SimThread] = []
     for msg_name, period in profile:
-        t = SimThread(db, msg_name, period, bus)
+        t = SimThread(db, msg_name, period, bus, vehicle_state=vehicle_state)
         threads.append(t)
         t.start()
     # Each listener gets its own bus instance: a single python-can Bus's

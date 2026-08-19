@@ -1,6 +1,6 @@
 # MCP-CAN: Virtual CAN + MCP Server
 
-An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE (or streamable-HTTP)—no hardware required by default.
+An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE (or streamable-HTTP), no hardware required by default.
 
 ---
 
@@ -11,9 +11,9 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
 - ECU simulator that streams multiple messages, plus OBD-II and UDS-style diagnostic responders.
 - Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request).
 - Structured tool output (typed Pydantic models), duration-capped tool calls, `/healthz`, colorized logging.
-- Read-only live web dashboard (`/dashboard`) — signal values and recent frames, updated over SSE.
+- Read-only live web dashboard (`/dashboard`): signal values and recent frames, updated over SSE.
 - Dockerfile + docker compose for server + simulator.
-- Unit tests, type hints, lint config (ruff, mypy) — see `CONTRIBUTING.md`.
+- Unit tests, type hints, lint config (ruff, mypy); see `CONTRIBUTING.md`.
 
 ## Repository Layout
 - `src/mcp_can/`
@@ -73,7 +73,9 @@ mcp-can diag-request --service-id 0x22 --parameter-id 0x05   # READ_DATA_BY_ID
 ```
 
 ## Live Dashboard
-With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard` in a browser: live signal values grouped by ECU message, and a scrolling feed of recent frames, updating ~2x/second over Server-Sent Events. It's read-only (view only, no controls to send frames) and self-contained — no build step, no external assets, works offline. Like everything bus-related here, it only shows data when the simulator shares the *same process* as the server (`mcp-can demo`); pointed at a bare `mcp-can server` with no simulator, it just shows "waiting for CAN traffic."
+With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard` in a browser: live signal values grouped by ECU message, and a scrolling feed of recent frames, updating ~2x/second over Server-Sent Events. It's read-only (view only, no controls to send frames) and self-contained: no build step, no external assets, works offline. Like everything bus-related here, it only shows data when the simulator shares the *same process* as the server (`mcp-can demo`); pointed at a bare `mcp-can server` with no simulator, it just shows "waiting for CAN traffic."
+
+![MCP-CAN live dashboard showing grouped ECU signal values and a recent-frames feed](docs/images/dashboard.png)
 
 ## Available MCP Tools & Resources
 | Name | Type | Description |
@@ -82,15 +84,15 @@ With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard
 | `decode_can_frame` | tool | Decode one frame's bytes into named signals. |
 | `filter_frames` | tool | Like `read_can_frames`, filtered by arbitration ID and/or signal. |
 | `monitor_signal` | tool | Timestamped samples of one decoded signal, from the same history buffer. |
-| `get_vehicle_snapshot` | tool | Last known value of every signal seen so far, one entry per signal (not per frame) with an `age_s` freshness indicator — a single-call overview instead of decoding a frame stream yourself. |
+| `get_vehicle_snapshot` | tool | Last known value of every signal seen so far, one entry per signal (not per frame) with an `age_s` freshness indicator: a single-call overview instead of decoding a frame stream yourself. |
 | `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
 | `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
 | `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
 
-`read_can_frames`/`filter_frames`/`monitor_signal` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener — they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
+`read_can_frames`/`filter_frames`/`monitor_signal` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener: they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
 
 ### About the diagnostic responder
-`vehicle.dbc` defines a UDS-like diagnostic schema — `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU — but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED` — see `diagnostics.py::handle_service`.
+`vehicle.dbc` defines a UDS-like diagnostic schema: `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU, but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED`; see `diagnostics.py::handle_service`.
 
 ## MCP Inspector (GUI for your tools)
 Use the official Inspector to explore and call your MCP tools without writing a host:
@@ -146,7 +148,7 @@ Env vars (prefix `MCP_CAN_`):
 - `CAN_CHANNEL` (default `bus0`)
 - `DBC_PATH` (default `vehicle.dbc`)
 - `MCP_PORT` (default `6278`)
-- `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK — the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
+- `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK; the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
 - `MAX_DURATION_S` (default `30.0`) – caps every tool's `duration_s`/`timeout_s`
 - `LOG_LEVEL` (default `INFO`)
 
@@ -180,10 +182,10 @@ pytest -q
 ```
 
 ## Troubleshooting
-- No frames? Ensure both simulator and server use the same interface/channel (`virtual`/`bus0` by default), and — on Windows — that they're the same process (`mcp-can demo`) rather than two separate ones.
+- No frames? Ensure both simulator and server use the same interface/channel (`virtual`/`bus0` by default), and, on Windows, that they're the same process (`mcp-can demo`) rather than two separate ones.
 - DBC missing? Set `MCP_CAN_DBC_PATH` or place `vehicle.dbc` in repo root.
 - Docker networking: expose `6278` so your MCP host can reach it.
-- `streamable-http` transport fails immediately? Your installed `mcp` package predates its support — the log line tells you; switch to `sse` or `pip install -U mcp` (staying below `2.0.0`).
+- `streamable-http` transport fails immediately? Your installed `mcp` package predates its support; the log line tells you. Switch to `sse` or `pip install -U mcp` (staying below `2.0.0`).
 
 ## License
-MIT (see `LICENSE`). Educational/prototyping use only—use certified hardware for real automotive work.
+MIT (see `LICENSE`). Educational/prototyping use only; use certified hardware for real automotive work.

@@ -6,6 +6,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Correlated, plausible signal generation (`simulator/state.py`): a
+  background `VehicleState` ticks a small set of driving-dynamics variables
+  (throttle, RPM, speed, engine temp, fuel level) with realistic lag and
+  relationships between them, instead of `SimThread` drawing every signal
+  independently at random. `ENGINE_SPEED`/`ENGINE_LOAD` now track throttle,
+  `WHEEL_SPEED_*` tracks a common vehicle speed with small per-wheel jitter,
+  `FUEL_LEVEL` only decreases, `ENGINE_TEMP` warms toward operating
+  temperature over time. Signals with no correlation rule (doors, seatbelts,
+  fault flags, etc.) keep the previous independent-random behavior.
 - `get_vehicle_snapshot` MCP tool (plus `mcp-can snapshot` CLI command):
   the last known value of every signal seen so far, one entry per signal
   with an `age_s` freshness indicator, instead of decoding a stream of raw
@@ -41,6 +50,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`.
 
 ### Fixed
+- Dashboard values with a `scale`/`offset` (e.g. `58 * 0.4`) could display
+  IEEE-754 noise like `23.200000000000003`; `live_state.py` now rounds
+  float values for display.
 - **Diagnostic/OBD responder message theft**: two threads calling `.recv()`
   on the *same* `python-can` `Bus` instance silently split incoming messages
   between them instead of each seeing every message — the diagnostic

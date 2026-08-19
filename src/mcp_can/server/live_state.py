@@ -36,6 +36,12 @@ def _display_value(value: Any) -> Any:
     # dashboard viewer wants to see anyway (e.g. "FAULT_PRESENT", not "1").
     if hasattr(value, "name") and hasattr(value, "value"):
         return str(value)
+    if isinstance(value, float):
+        # raw * scale + offset (e.g. 58 * 0.4) routinely lands on an
+        # IEEE-754 neighbor like 23.200000000000003; harmless but ugly for
+        # a human-facing view, so round off the noise without pretending to
+        # more precision than these signals' scale factors actually carry.
+        return round(value, 3)
     return value
 
 

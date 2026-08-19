@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 OBD_BROADCAST_ID = 0x7DF
 OBD_RESPONSE_BASE_ID = 0x7E8  # first ECU response ID
@@ -89,3 +89,43 @@ def build_response_frame(
 ) -> Tuple[int, bytes]:
     data = _single_frame(payload)
     return (responder_id, bytes(data))
+
+
+def parse_response(data: Union[bytes, bytearray]) -> Tuple[int, Optional[int], List[int]]:
+    """Parse a single-frame OBD-II response.
+
+    Returns (response_service, pid, value_bytes). `response_service` is the
+    request service + 0x40 (e.g. 0x41 for a Mode 01 reply); `pid` is present
+    for Mode 01/09 replies, None otherwise.
+    """
+    data = bytes(data)
+    if not data:
+        return (0, None, [])
+    length = data[0]
+    payload = list(data[1:1 + length])
+    if not payload:
+        return (0, None, [])
+    response_service = payload[0]
+    if response_service in (0x41, 0x49) and len(payload) > 1:
+        return (response_service, payload[1], payload[2:])
+    return (response_service, None, payload[1:])
+
+
+def decode_pid_value(pid: Optional[int], value_bytes: List[int]) -> Optional[Dict[str, Any]]:
+    """Best-effort human-friendly decode for the PIDs `simulate_response` implements.
+
+    Unknown PIDs (or ones with no bytes) return None rather than guessing.
+    """
+    if pid is None or not value_bytes:
+        return None
+    a = value_bytes[0]
+    if pid == 0x05:
+        return {"name": "engine_coolant_temp", "value": a - 40, "unit": "degC"}
+    if pid == 0x0D:
+        return {"name": "vehicle_speed", "value": a, "unit": "km/h"}
+    if pid == 0x2F:
+        return {"name": "fuel_tank_level", "value": round(a * 100 / 255, 1), "unit": "%"}
+    if pid == 0x51:
+        fuel_types = {1: "gasoline"}
+        return {"name": "fuel_type", "value": fuel_types.get(a, f"unknown(0x{a:02x})")}
+    return None

@@ -1,33 +1,36 @@
 # MCP-CAN: Virtual CAN + MCP Server
 
-An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE—no hardware required by default.
+An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE (or streamable-HTTP)—no hardware required by default.
 
 ---
 
 ## Highlights
-- MCP server for CAN/OBD → LLM/SLM (tools + DBC metadata over SSE).
+- MCP server for CAN/OBD/UDS-diagnostics → LLM/SLM (tools + DBC metadata, SSE or streamable-HTTP).
 - Virtual CAN backend (python-can) out of the box; optional SocketCAN/vCAN on Linux.
 - DBC-driven encoding/decoding via `cantools`.
-- ECU simulator that streams multiple messages plus demo OBD-II responses.
-- MCP server (SSE) exposing tools for frames, filtering, monitoring, and DBC info.
-- Typer CLI: `mcp-can` (simulate, server, frames, decode, monitor, obd-request).
+- ECU simulator that streams multiple messages, plus OBD-II and UDS-style diagnostic responders.
+- Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request).
+- Structured tool output (typed Pydantic models), duration-capped tool calls, `/healthz`, colorized logging.
 - Dockerfile + docker compose for server + simulator.
-- Unit tests, type hints, lint config (ruff, mypy).
+- Unit tests, type hints, lint config (ruff, mypy) — see `CONTRIBUTING.md`.
 
 ## Repository Layout
 - `src/mcp_can/`
   - `cli.py` – Typer commands
   - `bus.py` – python-can helpers
   - `dbc.py` – DBC loading/decoding
-  - `config.py` – env settings (`MCP_CAN_*`)
-  - `models.py` – simple dataclasses
-  - `simulator/runner.py` – ECU simulator + OBD responder
-  - `server/fastmcp_server.py` – MCP tools (SSE)
-  - `obd.py` – minimal OBD-II request/response helpers
-- `vehicle.dbc` – sample CAN database
-- `simulate-ecus.py`, `can-mcp.py` – entrypoints
+  - `obd.py` – OBD-II (SAE J1979) request/response helpers
+  - `diagnostics.py` – UDS-style diagnostic service/response-code logic
+  - `config.py` – env settings (`MCP_CAN_*`) + logging setup
+  - `models.py` – internal bus-layer dataclass (`Frame`)
+  - `simulator/runner.py` – ECU simulator + OBD/diagnostic responders
+  - `server/fastmcp_server.py` – MCP tools/resources
+  - `server/schemas.py` – Pydantic models for MCP tool structured output
+- `vehicle.dbc` – sample CAN database (incl. a UDS-like diagnostic schema)
+- `simulate-ecus.py`, `can-mcp.py` – standalone run-without-installing entrypoints
 - `docker/compose.yml`, `Dockerfile`
 - `tests/` – unit tests
+- `CONTRIBUTING.md`, `CHANGELOG.md`
 
 ## Prerequisites
 - Python 3.10+
@@ -51,7 +54,7 @@ mcp-can simulate
 mcp-can server --port 6278
 ```
 
-Single-process (helps on Windows if virtual backend doesn’t share across processes):
+Single-process (helps on Windows if virtual backend doesn't share across processes):
 ```bash
 mcp-can demo --port 6278
 ```
@@ -59,10 +62,28 @@ mcp-can demo --port 6278
 Sample interactions:
 ```bash
 mcp-can frames --seconds 2
-mcp-can decode 0x100 "01 02 03 04 05 06 07 08"
+mcp-can decode 0x100 "01 02 03 04 05 06 07 08"       # pretty table by default, --json for scripting
+mcp-can dbc-info                                      # table of every message/signal in the DBC
 mcp-can monitor ENGINE_SPEED --seconds 3
 mcp-can obd-request --service 0x01 --pid 0x0D
+mcp-can diag-request --service-id 0x22 --parameter-id 0x05   # READ_DATA_BY_ID
 ```
+
+## Available MCP Tools & Resources
+| Name | Type | Description |
+|---|---|---|
+| `read_can_frames` | tool | Raw frames seen over `duration_s` seconds. |
+| `decode_can_frame` | tool | Decode one frame's bytes into named signals. |
+| `filter_frames` | tool | Like `read_can_frames`, filtered by arbitration ID and/or signal. |
+| `monitor_signal` | tool | Timestamped samples of one decoded signal. |
+| `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
+| `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
+| `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
+
+Every tool call opens a fresh listen window; `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s) so a client can't tie up a listener indefinitely. All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
+
+### About the diagnostic responder
+`vehicle.dbc` defines a UDS-like diagnostic schema — `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU — but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED` — see `diagnostics.py::handle_service`.
 
 ## MCP Inspector (GUI for your tools)
 Use the official Inspector to explore and call your MCP tools without writing a host:
@@ -72,15 +93,13 @@ npx @modelcontextprotocol/inspector
 When prompted, connect to your server:
 - URL: `http://localhost:6278/sse`
 
-You can then:
-- List tools and resources (`read_can_frames`, `decode_can_frame`, `filter_frames`, `monitor_signal`, `dbc_info`).
-- Call a tool (e.g., monitor `ENGINE_SPEED` for 5 seconds) and view JSON output live.
+You can then list tools/resources and call one (e.g. monitor `ENGINE_SPEED` for 5 seconds) and view structured output live.
 
 ## Using with Ollama (local LLM)
 1) Ensure Ollama is running: `ollama serve` and pull a model: `ollama pull llama3`
 2) Run simulator + MCP server (see Quickstart).
 3) Point your MCP-capable host at `http://localhost:6278/sse` and configure its model endpoint to `http://localhost:11434` with your model name (e.g., `llama3`).
-4) Prompt the host: “Monitor ENGINE_SPEED for 5 seconds” or “List all DBC messages.”
+4) Prompt the host: "Monitor ENGINE_SPEED for 5 seconds", "List all DBC messages", or "Send a READ_DATA_BY_ID diagnostic request for parameter 5."
 
 If you need a minimal host, pair `@modelcontextprotocol/sdk` with Ollama (see SDK docs) or use Inspector for manual tool calls.
 
@@ -102,11 +121,16 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 
 ## CLI Reference
 - `mcp-can simulate` – start ECU simulator using `vehicle.dbc`.
-- `mcp-can server [--port 6278]` – run MCP SSE server.
+- `mcp-can server [--port 6278] [--transport sse|streamable-http|stdio]` – run the MCP server.
+- `mcp-can demo [--port] [--transport]` – simulator + server in one process.
 - `mcp-can frames --seconds 1.0` – capture raw frames as JSON.
-- `mcp-can decode <id> <data>` – decode a single frame (`id` hex/decimal, `data` space/comma-separated bytes).
-- `mcp-can monitor <signal> --seconds 2.0` – watch one signal.
-- `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – demo OBD-II request.
+- `mcp-can decode <id> <data> [--json]` – decode a single frame (table by default; `id` hex/decimal, `data` space/comma-separated bytes).
+- `mcp-can dbc-info [message]` – table of every message/signal in the DBC, or just one message's.
+- `mcp-can monitor <signal> --seconds 2.0 [--json]` – watch one signal (live output by default).
+- `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – OBD-II request; response includes a decoded value for known PIDs.
+- `mcp-can diag-request --service-id <hex|int> [--parameter-id] [--data-field]` – UDS-style diagnostic request; prints every ECU's response.
+
+`server`/`demo`/`simulate` all print colorized logs (via `rich`) instead of raw text.
 
 ## Configuration
 Env vars (prefix `MCP_CAN_`):
@@ -114,6 +138,9 @@ Env vars (prefix `MCP_CAN_`):
 - `CAN_CHANNEL` (default `bus0`)
 - `DBC_PATH` (default `vehicle.dbc`)
 - `MCP_PORT` (default `6278`)
+- `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK — the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
+- `MAX_DURATION_S` (default `30.0`) – caps every tool's `duration_s`/`timeout_s`
+- `LOG_LEVEL` (default `INFO`)
 
 You can set these in a `.env` file at repo root.
 
@@ -130,8 +157,10 @@ Compose (from `docker/`):
 ```bash
 docker compose up -d --build
 ```
+> The compose file currently runs `server` and `simulator` as separate containers; like running them as two separate local processes, they won't share the virtual CAN bus unless the host provides a real shared `vcan0` interface. For a working combined setup today, use the single-container Dockerfile above (`mcp-can demo`).
 
 ## Development & Testing
+See `CONTRIBUTING.md` for the full guide. Quick version:
 ```bash
 pip install -r requirements.txt
 pip install -e .
@@ -143,9 +172,10 @@ pytest -q
 ```
 
 ## Troubleshooting
-- No frames? Ensure both simulator and server use the same interface/channel (`virtual`/`bus0` by default).
+- No frames? Ensure both simulator and server use the same interface/channel (`virtual`/`bus0` by default), and — on Windows — that they're the same process (`mcp-can demo`) rather than two separate ones.
 - DBC missing? Set `MCP_CAN_DBC_PATH` or place `vehicle.dbc` in repo root.
-- Docker networking: expose `6278` so your MCP host can reach SSE.
+- Docker networking: expose `6278` so your MCP host can reach it.
+- `streamable-http` transport fails immediately? Your installed `mcp` package predates its support — the log line tells you; switch to `sse` or `pip install -U mcp` (staying below `2.0.0`).
 
 ## License
 MIT (see `LICENSE`). Educational/prototyping use only—use certified hardware for real automotive work.

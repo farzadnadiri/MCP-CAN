@@ -1,15 +1,35 @@
+import logging
 import time
 import types
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, List, Optional
 
+import can
 from mcp.server.fastmcp import Context, FastMCP
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ..bus import make_bus, shutdown_bus
-from ..config import get_settings
-from ..dbc import decode_frame, load_dbc
+from ..config import configure_logging, get_settings
+from ..dbc import decode_frame, load_dbc, signal_int
+from ..diagnostics import (
+    REQUEST_MESSAGE,
+    RESPONSE_MESSAGES,
+    ecu_name_from_response_message,
+    response_code_name,
+)
+from ..obd import build_request, decode_pid_value, parse_response
+from .schemas import (
+    DecodeResult,
+    DiagnosticEcuResponse,
+    DiagnosticResult,
+    FrameOut,
+    ObdResponse,
+    SignalSample,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastMCP:
@@ -18,25 +38,37 @@ def create_app() -> FastMCP:
     mcp = FastMCP("Vehicle CAN MCP")
     db = load_dbc(settings.dbc_path)
 
+    def _capped_duration(duration_s: float) -> float:
+        if duration_s > settings.max_duration_s:
+            logger.warning(
+                "duration_s=%.1f exceeds max_duration_s=%.1f; capping.",
+                duration_s,
+                settings.max_duration_s,
+            )
+            return settings.max_duration_s
+        return duration_s
+
     @mcp.tool()
     async def read_can_frames(
         duration_s: float = 1.0,
         ctx: Context | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[FrameOut]:
+        """Listen on the CAN bus for `duration_s` seconds and return every raw frame seen."""
+        duration_s = _capped_duration(duration_s)
         bus = make_bus(settings.can_interface, settings.can_channel)
         try:
-            frames: List[Dict[str, Any]] = []
+            frames: List[FrameOut] = []
             end = time.time() + duration_s
             count = 0
             while time.time() < end:
                 msg = bus.recv(timeout=0.1)
                 if msg:
                     frames.append(
-                        {
-                            "timestamp": msg.timestamp,
-                            "arbitration_id": hex(msg.arbitration_id),
-                            "data": list(msg.data),
-                        }
+                        FrameOut(
+                            timestamp=msg.timestamp,
+                            arbitration_id=hex(msg.arbitration_id),
+                            data=list(msg.data),
+                        )
                     )
                     count += 1
                     if ctx:
@@ -46,12 +78,13 @@ def create_app() -> FastMCP:
             shutdown_bus(bus)
 
     @mcp.tool()
-    def decode_can_frame(arbitration_id: int, data: List[int]) -> Dict[str, Any]:
+    def decode_can_frame(arbitration_id: int, data: List[int]) -> DecodeResult:
+        """Decode a single CAN frame's bytes into named signals using the loaded DBC."""
         try:
             decoded = decode_frame(db, arbitration_id, bytes(data))
-            return {"status": "success", "signals": decoded}
+            return DecodeResult(status="success", signals=decoded)
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            return DecodeResult(status="error", message=str(e))
 
     @mcp.tool()
     async def filter_frames(
@@ -59,32 +92,43 @@ def create_app() -> FastMCP:
         signal_name: Optional[str] = None,
         duration_s: float = 1.0,
         ctx: Context | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[FrameOut]:
+        """Listen for `duration_s` seconds, keeping only frames matching the given
+        arbitration_id and/or containing signal_name once decoded."""
+        duration_s = _capped_duration(duration_s)
         bus = make_bus(settings.can_interface, settings.can_channel)
         try:
             end = time.time() + duration_s
-            results: List[Dict[str, Any]] = []
+            results: List[FrameOut] = []
             count = 0
             while time.time() < end:
                 msg = bus.recv(timeout=0.1)
                 if msg:
                     if arbitration_id is not None and msg.arbitration_id != arbitration_id:
                         continue
-                    frame_info: Dict[str, Any] = {
-                        "timestamp": msg.timestamp,
-                        "arbitration_id": hex(msg.arbitration_id),
-                        "data": list(msg.data),
-                    }
                     if signal_name:
                         try:
                             decoded = decode_frame(db, msg.arbitration_id, msg.data)
                             if signal_name in decoded:
-                                frame_info["signal_value"] = decoded[signal_name]
-                                results.append(frame_info)
+                                results.append(
+                                    FrameOut(
+                                        timestamp=msg.timestamp,
+                                        arbitration_id=hex(msg.arbitration_id),
+                                        data=list(msg.data),
+                                        signal_name=signal_name,
+                                        signal_value=decoded[signal_name],
+                                    )
+                                )
                         except Exception:
                             pass
                     else:
-                        results.append(frame_info)
+                        results.append(
+                            FrameOut(
+                                timestamp=msg.timestamp,
+                                arbitration_id=hex(msg.arbitration_id),
+                                data=list(msg.data),
+                            )
+                        )
                     count += 1
                     if ctx:
                         await ctx.report_progress(count)
@@ -97,11 +141,13 @@ def create_app() -> FastMCP:
         signal_name: str,
         duration_s: float = 2.0,
         ctx: Context | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SignalSample]:
+        """Watch one decoded signal for `duration_s` seconds and return timestamped samples."""
+        duration_s = _capped_duration(duration_s)
         bus = make_bus(settings.can_interface, settings.can_channel)
         try:
             end = time.time() + duration_s
-            results: List[Dict[str, Any]] = []
+            results: List[SignalSample] = []
             count = 0
             while time.time() < end:
                 msg = bus.recv(timeout=0.1)
@@ -110,10 +156,7 @@ def create_app() -> FastMCP:
                         decoded = decode_frame(db, msg.arbitration_id, msg.data)
                         if signal_name in decoded:
                             results.append(
-                                {
-                                    "timestamp": msg.timestamp,
-                                    "value": decoded[signal_name],
-                                }
+                                SignalSample(timestamp=msg.timestamp, value=decoded[signal_name])
                             )
                             count += 1
                             if ctx:
@@ -121,6 +164,95 @@ def create_app() -> FastMCP:
                     except Exception:
                         pass
             return results
+        finally:
+            shutdown_bus(bus)
+
+    @mcp.tool()
+    def send_obd_request(
+        service: int,
+        pid: Optional[int] = None,
+        timeout_s: float = 2.0,
+    ) -> ObdResponse:
+        """Send a standard OBD-II (SAE J1979) request (e.g. service=1, pid=0x0D for
+        vehicle speed) and return the first ECU response, decoded where the PID is
+        one the simulator implements."""
+        timeout_s = _capped_duration(timeout_s)
+        bus = make_bus(settings.can_interface, settings.can_channel)
+        try:
+            arb_id, data = build_request(service, pid)
+            bus.send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=False))
+            msg = bus.recv(timeout=timeout_s)
+            if not msg:
+                return ObdResponse(status="timeout", message="No OBD-II response within timeout_s")
+            response_service, resp_pid, value_bytes = parse_response(msg.data)
+            return ObdResponse(
+                status="success",
+                arbitration_id=hex(msg.arbitration_id),
+                response_service=response_service,
+                pid=resp_pid,
+                decoded=decode_pid_value(resp_pid, value_bytes),
+                raw_data=list(msg.data),
+            )
+        except Exception as e:
+            return ObdResponse(status="error", message=str(e))
+        finally:
+            shutdown_bus(bus)
+
+    @mcp.tool()
+    def send_diagnostic_request(
+        service_id: int,
+        parameter_id: int = 0,
+        data_field: int = 0,
+        timeout_s: float = 2.0,
+    ) -> DiagnosticResult:
+        """Send a UDS-style diagnostic request (see vehicle.dbc's DIAGNOSTIC_REQUEST
+        SERVICE_ID choices, e.g. 0x22=READ_DATA_BY_ID, 0x11=RESET_ECU) and collect
+        responses from every ECU that answers within timeout_s."""
+        timeout_s = _capped_duration(timeout_s)
+        request_msg = db.get_message_by_name(REQUEST_MESSAGE)
+        response_frame_ids = {
+            db.get_message_by_name(name).frame_id: name for name in RESPONSE_MESSAGES
+        }
+        bus = make_bus(settings.can_interface, settings.can_channel)
+        try:
+            payload = request_msg.encode(
+                {
+                    "SERVICE_ID": service_id,
+                    "PARAMETER_ID": parameter_id,
+                    "DATA_FIELD": data_field,
+                }
+            )
+            bus.send(
+                can.Message(
+                    arbitration_id=request_msg.frame_id, data=payload, is_extended_id=False
+                )
+            )
+            responses: List[DiagnosticEcuResponse] = []
+            end = time.time() + timeout_s
+            while time.time() < end:
+                msg = bus.recv(timeout=0.1)
+                if msg and msg.arbitration_id in response_frame_ids:
+                    decoded = decode_frame(db, msg.arbitration_id, msg.data)
+                    responses.append(
+                        DiagnosticEcuResponse(
+                            ecu=ecu_name_from_response_message(
+                                response_frame_ids[msg.arbitration_id]
+                            ),
+                            service_id=signal_int(decoded.get("SERVICE_ID", 0)),
+                            parameter_id=signal_int(decoded.get("PARAMETER_ID", 0)),
+                            response_code=response_code_name(
+                                signal_int(decoded.get("RESPONSE_CODE", 0))
+                            ),
+                            data_field=signal_int(decoded.get("DATA_FIELD", 0)),
+                        )
+                    )
+            if not responses:
+                return DiagnosticResult(
+                    status="timeout", message="No ECU responded within timeout_s"
+                )
+            return DiagnosticResult(status="success", responses=responses)
+        except Exception as e:
+            return DiagnosticResult(status="error", message=str(e))
         finally:
             shutdown_bus(bus)
 
@@ -178,6 +310,18 @@ def create_app() -> FastMCP:
     async def _protected_discovery(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "auth": False})
 
+    @mcp.custom_route("/healthz", methods=["GET"])
+    async def _healthz(_: Request) -> JSONResponse:
+        try:
+            has_messages = len(db.messages) > 0
+        except Exception:
+            has_messages = False
+        healthy = has_messages
+        return JSONResponse(
+            {"status": "ok" if healthy else "error", "dbc_loaded": has_messages},
+            status_code=200 if healthy else 503,
+        )
+
     # Enable permissive CORS so browser-based MCP hosts (Inspector) can reach SSE.
     original_sse_app = mcp.sse_app
 
@@ -200,10 +344,34 @@ def create_app() -> FastMCP:
     return mcp
 
 
+def _mcp_sdk_version() -> str:
+    try:
+        return version("mcp")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def main() -> None:
     settings = get_settings()
+    configure_logging(settings)
     mcp = create_app()
     mcp.settings.port = settings.mcp_port
     # Ensure accessible outside container/host
     mcp.settings.host = "0.0.0.0"
-    mcp.run(transport="sse")
+    logger.info(
+        "Starting MCP-CAN server on %s:%s (transport=%s)",
+        mcp.settings.host,
+        mcp.settings.port,
+        settings.mcp_transport,
+    )
+    try:
+        mcp.run(transport=settings.mcp_transport)  # type: ignore[arg-type]
+    except ValueError:
+        if settings.mcp_transport != "sse":
+            logger.error(
+                "Transport %r is not supported by the installed mcp SDK (%s). "
+                "Set MCP_CAN_MCP_TRANSPORT=sse, or upgrade the mcp package.",
+                settings.mcp_transport,
+                _mcp_sdk_version(),
+            )
+        raise

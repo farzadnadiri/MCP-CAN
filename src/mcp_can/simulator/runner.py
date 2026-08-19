@@ -1,3 +1,4 @@
+import logging
 import random
 import threading
 import time
@@ -7,10 +8,13 @@ import can
 import cantools
 
 from ..bus import make_bus
-from ..config import get_settings
-from ..dbc import load_dbc
+from ..config import configure_logging, get_settings
+from ..dbc import decode_frame, load_dbc, signal_int
+from ..diagnostics import REQUEST_MESSAGE, RESPONSE_MESSAGES, handle_service
 from ..obd import OBD_BROADCAST_ID, build_response_frame, parse_request, simulate_response
 from .profiles import DEFAULT_PROFILE
+
+logger = logging.getLogger(__name__)
 
 
 class SimThread(threading.Thread):
@@ -52,9 +56,8 @@ class SimThread(threading.Thread):
                     is_extended_id=False,
                 )
                 self.bus.send(can_msg)
-                # print(f"Sent {self.msg.name}: {signals}")
-            except Exception as e:
-                print(f"Error sending {self.msg.name}: {e}")
+            except Exception:
+                logger.exception("Error sending %s", self.msg.name)
             time.sleep(self.period)
 
 
@@ -78,11 +81,58 @@ class OBDResponderThread(threading.Thread):
                             is_extended_id=False,
                         )
                         self.bus.send(resp)
-                    except Exception as e:
-                        print(f"OBD responder error: {e}")
+                    except Exception:
+                        logger.exception("OBD responder error")
+
+
+class DiagnosticResponderThread(threading.Thread):
+    """Simulates every ECU answering broadcast UDS-style diagnostic requests.
+
+    See `diagnostics.py` for why this responds from all 4 ECUs rather than
+    a single addressed one.
+    """
+
+    def __init__(self, db: cantools.database.Database, bus: can.BusABC):
+        super().__init__(daemon=True)
+        self.db = db
+        self.bus = bus
+        self.request_msg = db.get_message_by_name(REQUEST_MESSAGE)
+        self.response_msgs = [db.get_message_by_name(name) for name in RESPONSE_MESSAGES]
+
+    def run(self) -> None:
+        while True:
+            msg = self.bus.recv(timeout=0.1)
+            if msg and msg.arbitration_id == self.request_msg.frame_id:
+                try:
+                    decoded = decode_frame(self.db, self.request_msg.frame_id, msg.data)
+                    service_id = signal_int(decoded.get("SERVICE_ID", 0))
+                    parameter_id = signal_int(decoded.get("PARAMETER_ID", 0))
+                    data_field = signal_int(decoded.get("DATA_FIELD", 0))
+                    response_code, response_data = handle_service(
+                        service_id, parameter_id, data_field
+                    )
+                    for response_msg in self.response_msgs:
+                        payload = response_msg.encode(
+                            {
+                                "SERVICE_ID": service_id,
+                                "PARAMETER_ID": parameter_id,
+                                "RESPONSE_CODE": response_code,
+                                "DATA_FIELD": response_data,
+                            }
+                        )
+                        self.bus.send(
+                            can.Message(
+                                arbitration_id=response_msg.frame_id,
+                                data=payload,
+                                is_extended_id=False,
+                            )
+                        )
+                except Exception:
+                    logger.exception("Diagnostic responder error")
 
 
 def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
+    configure_logging()
     settings = get_settings()
     db = load_dbc(settings.dbc_path)
     bus = make_bus(settings.can_interface, settings.can_channel)
@@ -91,14 +141,25 @@ def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
         t = SimThread(db, msg_name, period, bus)
         threads.append(t)
         t.start()
-    obd_t = OBDResponderThread(bus)
+    # Each listener gets its own bus instance: a single python-can Bus's
+    # recv() queue is consumed once per message, so threads sharing one
+    # instance would silently steal frames from each other rather than each
+    # seeing every frame.
+    obd_t = OBDResponderThread(make_bus(settings.can_interface, settings.can_channel))
     obd_t.start()
-    print("ECU simulation running. Press Ctrl-C to exit.")
+    diag_t = DiagnosticResponderThread(
+        db, make_bus(settings.can_interface, settings.can_channel)
+    )
+    diag_t.start()
+    logger.info(
+        "ECU simulation running (%d profile threads + OBD + diagnostics). Press Ctrl-C to exit.",
+        len(threads),
+    )
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("Shutting down simulation...")
+        logger.info("Shutting down simulation...")
         try:
             bus.shutdown()
         except Exception:
@@ -107,4 +168,3 @@ def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
 
 def main() -> None:
     run_simulator()
-

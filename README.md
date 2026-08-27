@@ -8,12 +8,13 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
 ---
 
 ## ✨ Highlights
-- MCP server for CAN/OBD/UDS-diagnostics → LLM/SLM (tools + DBC metadata, SSE or streamable-HTTP).
+- MCP server for CAN/OBD/UDS-diagnostics/J1939 → LLM/SLM (tools + DBC metadata, SSE or streamable-HTTP).
 - Virtual CAN backend (python-can) out of the box; optional SocketCAN/vCAN on Linux.
 - DBC-driven encoding/decoding via `cantools`.
-- ECU simulator that streams multiple messages, plus OBD-II and UDS-style diagnostic responders.
+- ECU simulator that streams multiple messages, plus OBD-II, UDS-style, and SAE J1939 responders.
+- SAE J1939 (heavy-duty, 29-bit extended IDs): ID decomposition (priority/PGN/source+destination address), a curated PGN/SPN catalog (EEC1, EEC2, ET1, CCVS1, LFE1, DD1), Request PGN (`0xEA00`) round trips, and DM1 active-DTC (SPN/FMI) broadcasts. Runs alongside the 11-bit bus; toggle with `MCP_CAN_J1939_ENABLED`.
 - Correlated driving-dynamics signal generation, plus named fault-injection scenarios (`overheat`, `abs_fault`, `low_fuel`) with matching DTCs.
-- Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request, fault).
+- Typer CLI: `mcp-can` (simulate, server, demo, frames, decode, monitor, dbc-info, obd-request, diag-request, fault, j1939-decode, j1939-pgns, j1939-request, j1939-dtcs).
 - Structured tool output (typed Pydantic models), duration-capped tool calls, `/healthz`, colorized logging.
 - Read-only live web dashboard (`/dashboard`): signal values and recent frames, updated over SSE.
 - Dockerfile + docker compose for server + simulator.
@@ -26,9 +27,11 @@ An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It si
   - `dbc.py` – DBC loading/decoding
   - `obd.py` – OBD-II (SAE J1979) request/response helpers
   - `diagnostics.py` – UDS-style diagnostic service/response-code logic
+  - `j1939.py` – SAE J1939: 29-bit ID decomposition, PGN/SPN catalog, DM1 DTCs, Request PGN
   - `config.py` – env settings (`MCP_CAN_*`) + logging setup
   - `models.py` – internal bus-layer dataclass (`Frame`)
   - `simulator/runner.py` – ECU simulator + OBD/diagnostic responders
+  - `simulator/j1939_runner.py` – J1939 broadcasters (EEC1/ET1/CCVS1/…), Request PGN responder, DM1 emitter
   - `simulator/state.py` – correlated driving-dynamics state (RPM/speed/throttle/etc.)
   - `simulator/faults.py` – named fault-injection presets + activation protocol
   - `server/fastmcp_server.py` – MCP tools/resources + dashboard routes
@@ -76,6 +79,9 @@ mcp-can dbc-info                                      # table of every message/s
 mcp-can monitor ENGINE_SPEED --seconds 3
 mcp-can obd-request --service 0x01 --pid 0x0D
 mcp-can diag-request --service-id 0x22 --parameter-id 0x05   # READ_DATA_BY_ID
+mcp-can j1939-pgns                                            # J1939 PGN/SPN catalog
+mcp-can j1939-request 0xF004                                  # ask ECUs to send EEC1 (engine speed)
+mcp-can j1939-dtcs                                            # read the latest DM1 active-DTC broadcast
 ```
 
 ## 📊 Live Dashboard
@@ -94,9 +100,13 @@ With `mcp-can demo` (or `server`) running, open `http://localhost:6278/dashboard
 | `send_obd_request` | tool | Standard OBD-II (SAE J1979) request; decodes known PIDs (coolant temp, speed, fuel level, fuel type). |
 | `send_diagnostic_request` | tool | UDS-style diagnostic request (`vehicle.dbc`'s `DIAGNOSTIC_REQUEST`); collects every ECU's response. |
 | `activate_fault_scenario` | tool | Activate (or clear) a named fault-injection preset (`overheat`, `abs_fault`, `low_fuel`) in the running simulator; see below. |
+| `decode_j1939_frame` | tool | Decompose a 29-bit J1939 ID (priority / PGN / source + destination address) and decode known SPNs from the payload. |
+| `list_j1939_pgns` | tool | The J1939 PGN/SPN catalog this server can decode and request (bit layout, scaling, units). |
+| `request_j1939_pgn` | tool | Send a J1939 Request PGN (`0xEA00`) and return the decoded responses (needs a simulator on this process's bus). |
+| `read_j1939_dtcs` | tool | Most recent J1939 DM1 broadcast: lamp status plus every active SPN/FMI. Served from the frame history buffer. |
 | `dbc_info` | resource (`file://vehicle.dbc`) | Full DBC dump: nodes, messages, signals. |
 
-`read_can_frames`/`filter_frames`/`monitor_signal` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener: they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
+`read_can_frames`/`filter_frames`/`monitor_signal`/`read_j1939_dtcs` are served from a single continuously-running history buffer (`server/live_state.py`) rather than each opening its own bus listener: they return immediately and won't miss frames sent between calls. `send_obd_request`/`send_diagnostic_request`/`request_j1939_pgn` are request/response and still wait live for a reply. In both cases, `duration_s`/`timeout_s` is capped by `MCP_CAN_MAX_DURATION_S` (default 30s; the history buffer retains at least that much, or 60s, whichever is larger). All tools return typed, structured content (see `server/schemas.py`) rather than ad-hoc JSON.
 
 ### 🩺 About the diagnostic responder
 `vehicle.dbc` defines a UDS-like diagnostic schema: `DIAGNOSTIC_REQUEST` (one shared request frame) and four `DIAGNOSTIC_RESPONSE_<ECU>` messages, one per ECU, but the request has no per-ECU target field. The simulator treats every request as functionally addressed to *all four* ECUs, so `send_diagnostic_request`/`diag-request` may return more than one response. Supported services: `START_DIAGNOSTIC_SESSION` (0x10) and `RESET_ECU` (0x11) are acknowledged OK; `READ_DATA_BY_ID` (0x22) returns a deterministic canned value derived from the parameter ID; `ROUTINE_CONTROL`/`READ_MEMORY`/`WRITE_MEMORY` and anything unrecognized return `SERVICE_NOT_SUPPORTED`; see `diagnostics.py::handle_service`.
@@ -108,6 +118,26 @@ Three named scenarios (`simulator/faults.py::PRESETS`) let you force the simulat
 - `low_fuel` – `FUEL_LEVEL` pinned critically low; no DTC (a low-fuel light isn't a stored trouble code on a real vehicle either).
 
 Activating a scenario sends a small control frame on the bus (like OBD/diagnostic requests, this is a round trip to whichever process is running the simulator, so it needs `mcp-can demo`/`simulate` already running) and overrides the named signals until cleared. Any DTCs the active scenario sets show up in `send_obd_request`/`obd-request`'s Mode 03 (service=3) response. Use `mcp-can fault list` or the `activate_fault_scenario` tool's docstring to see the current preset descriptions; pass `preset=None` (CLI: `clear`) to deactivate.
+
+### 🚛 SAE J1939 (heavy-duty)
+Alongside the light-vehicle 11-bit bus, the simulator also speaks **SAE J1939** — the protocol on trucks, buses and off-highway equipment. J1939 rides 29-bit *extended* CAN IDs whose arbitration field is itself structured data: a 3-bit priority, an 18-bit Parameter Group Number (PGN), and an 8-bit source address (plus, for peer-to-peer "PDU1" PGNs, a destination address). `src/mcp_can/j1939.py` is a self-contained implementation of that layer (not DBC-driven — `vehicle.dbc` models an 11-bit light-vehicle bus).
+
+What's simulated (`simulator/j1939_runner.py`), driven by the same correlated driving-dynamics state as the 11-bit signals:
+
+| PGN | Acronym | Contents |
+|---|---|---|
+| `0xF004` | EEC1 | Engine speed (SPN 190), actual engine percent torque (SPN 513) |
+| `0xF003` | EEC2 | Accelerator pedal position (SPN 91), percent load (SPN 92) |
+| `0xFEEE` | ET1 | Engine coolant temperature (SPN 110), fuel temperature (SPN 174) |
+| `0xFEF1` | CCVS1 | Wheel-based vehicle speed (SPN 84) |
+| `0xFEF2` | LFE1 | Engine fuel rate (SPN 183), throttle valve position (SPN 51) |
+| `0xFEFC` | DD1 | Fuel level (SPN 96) |
+| `0xFECA` | DM1 | Active diagnostic trouble codes (SPN + FMI), broadcast at 1 Hz |
+
+- **Request PGN (`0xEA00`):** `request_j1939_pgn` / `mcp-can j1939-request <pgn>` send a request; the simulator re-broadcasts the requested PGN once.
+- **DM1 / DTCs:** `read_j1939_dtcs` / `mcp-can j1939-dtcs` read the latest DM1. The fault-injection presets map to J1939 DTCs too — `overheat` → SPN 110 FMI 0, `abs_fault` → SPN 84 FMI 5, `low_fuel` → SPN 96 FMI 18 — and the malfunction-indicator lamp turns on while a preset is active.
+- J1939 signals also appear in `get_vehicle_snapshot` and the dashboard, grouped under `J1939:<acronym>`.
+- Set `MCP_CAN_J1939_ENABLED=false` for an 11-bit-only bus.
 
 ## 🔍 MCP Inspector (GUI for your tools)
 Use the official Inspector to explore and call your MCP tools without writing a host:
@@ -155,6 +185,10 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 - `mcp-can obd-request --service <hex|int> [--pid <hex|int>]` – OBD-II request; response includes a decoded value for known PIDs.
 - `mcp-can diag-request --service-id <hex|int> [--parameter-id] [--data-field]` – UDS-style diagnostic request; prints every ECU's response.
 - `mcp-can fault <preset|clear|list>` – activate/clear a fault-injection scenario in a running simulator, or list available presets.
+- `mcp-can j1939-decode <id> <data> [--json]` – decompose a 29-bit J1939 ID and decode known SPNs.
+- `mcp-can j1939-pgns` – list the J1939 PGNs/SPNs this project can decode.
+- `mcp-can j1939-request <pgn> [--timeout 2.0]` – send a J1939 Request PGN (`0xEA00`) and print decoded responses.
+- `mcp-can j1939-dtcs [--seconds 3.0]` – listen for a J1939 DM1 broadcast and print its active trouble codes.
 
 `server`/`demo`/`simulate` all print colorized logs (via `rich`) instead of raw text.
 
@@ -166,6 +200,7 @@ Env vars (prefix `MCP_CAN_`):
 - `MCP_PORT` (default `6278`)
 - `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK; the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
 - `MAX_DURATION_S` (default `30.0`) – caps every tool's `duration_s`/`timeout_s`
+- `J1939_ENABLED` (default `true`) – run the SAE J1939 side of the simulator alongside the 11-bit signals
 - `LOG_LEVEL` (default `INFO`)
 - `CORS_ALLOW_ORIGINS` (default `["*"]`, JSON array e.g. `["https://your-host.example"]`) – allowed browser origins for the SSE endpoint. Credentialed requests (`allow_credentials`) are only enabled once this is narrowed to specific origins; wildcard + credentials is a combination browsers reject outright, so it's never turned on for the default `"*"`. Override before any real deployment.
 

@@ -72,3 +72,53 @@ class VehicleSnapshot(BaseModel):
     signals: Dict[str, SignalState]
     frame_count: int
     uptime_s: float
+
+
+class J1939DecodeResult(BaseModel):
+    status: str
+    priority: Optional[int] = None
+    pgn: Optional[int] = None
+    pgn_hex: Optional[str] = None
+    pgn_name: Optional[str] = None
+    source_address: Optional[int] = None
+    destination_address: Optional[int] = None
+    is_broadcast: Optional[bool] = None
+    signals: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
+
+class J1939PgnInfo(BaseModel):
+    pgn: int
+    pgn_hex: str
+    acronym: str
+    name: str
+    length: int
+    spns: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class J1939PgnCatalog(BaseModel):
+    pgns: List[J1939PgnInfo] = Field(default_factory=list)
+
+
+class J1939RequestResult(BaseModel):
+    status: str
+    requested_pgn: Optional[int] = None
+    requested_pgn_hex: Optional[str] = None
+    responses: List[J1939DecodeResult] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class J1939Dtc(BaseModel):
+    spn: int
+    fmi: int
+    fmi_name: str
+    occurrence_count: int
+    conversion_method: int
+
+
+class J1939DtcResult(BaseModel):
+    status: str
+    source_address: Optional[int] = None
+    lamps: Dict[str, str] = Field(default_factory=dict)
+    dtcs: List[J1939Dtc] = Field(default_factory=list)
+    message: Optional[str] = None

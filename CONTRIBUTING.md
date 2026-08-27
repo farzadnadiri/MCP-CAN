@@ -50,9 +50,12 @@ only thing that catches wiring/transport-level regressions.
 
 ## Code layout
 
-- `src/mcp_can/bus.py`, `dbc.py`, `obd.py`, `diagnostics.py` — protocol/bus
-  logic, no MCP or CLI awareness. New protocol behavior belongs here, not in
-  `server/` or `cli.py`.
+- `src/mcp_can/bus.py`, `dbc.py`, `obd.py`, `diagnostics.py`, `j1939.py` —
+  protocol/bus logic, no MCP or CLI awareness. New protocol behavior belongs
+  here, not in `server/` or `cli.py`. `j1939.py` is deliberately *not*
+  DBC-driven (J1939 rides 29-bit extended IDs whose arbitration field is
+  structured data); its simulator side lives in
+  `simulator/j1939_runner.py`.
 - `src/mcp_can/server/fastmcp_server.py` — MCP tool/resource definitions;
   `server/schemas.py` — the Pydantic models those tools return;
   `server/live_state.py` — the single background listener backing both the
@@ -65,7 +68,9 @@ only thing that catches wiring/transport-level regressions.
   genuinely need to send something and wait for a specific reply, so they
   still open their own short-lived `make_bus()` instance.
 - `src/mcp_can/simulator/runner.py` — the ECU simulator threads
-  (`SimThread`, `OBDResponderThread`, `DiagnosticResponderThread`). Each
+  (`SimThread`, `OBDResponderThread`, `DiagnosticResponderThread`), plus
+  `j1939_runner.py`'s J1939 broadcasters/responders started from
+  `run_simulator()` when `MCP_CAN_J1939_ENABLED`. Each
   bus *listener* thread needs its **own** `make_bus(...)` instance — a
   single `python-can` `Bus` instance's `recv()` queue is consumed once per
   message, so two threads sharing one instance will silently steal frames

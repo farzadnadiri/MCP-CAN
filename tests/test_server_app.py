@@ -35,7 +35,33 @@ def test_expected_tools_are_registered():
         "send_diagnostic_request",
         "get_vehicle_snapshot",
         "activate_fault_scenario",
+        "decode_j1939_frame",
+        "list_j1939_pgns",
+        "request_j1939_pgn",
+        "read_j1939_dtcs",
     }.issubset(names)
+
+
+def test_decode_j1939_frame_tool():
+    from mcp_can import j1939
+
+    app = _make_app()
+    can_id = j1939.build_can_id(j1939.PGN_EEC1, source_address=0, priority=3)
+    data = list(j1939.encode_pgn(j1939.PGN_EEC1, {"ENGINE_SPEED": 1200.0}))
+    result = asyncio.run(
+        app.call_tool("decode_j1939_frame", {"arbitration_id": can_id, "data": data})
+    )
+    decoded = json.loads(result[0].text)
+    assert decoded["pgn_hex"] == "0xF004"
+    assert decoded["signals"]["ENGINE_SPEED"] == 1200.0
+
+
+def test_list_j1939_pgns_tool():
+    app = _make_app()
+    result = asyncio.run(app.call_tool("list_j1939_pgns", {}))
+    catalog = json.loads(result[0].text)
+    acronyms = {p["acronym"] for p in catalog["pgns"]}
+    assert {"EEC1", "ET1", "CCVS1"}.issubset(acronyms)
 
 
 def test_healthz_and_dashboard_routes():

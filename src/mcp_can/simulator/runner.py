@@ -13,6 +13,7 @@ from ..dbc import decode_frame, load_dbc, signal_int
 from ..diagnostics import REQUEST_MESSAGE, RESPONSE_MESSAGES, handle_service
 from ..obd import OBD_BROADCAST_ID, build_response_frame, parse_request, simulate_response
 from .faults import FaultListenerThread, FaultState
+from .j1939_runner import start_j1939_threads
 from .profiles import DEFAULT_PROFILE
 from .state import CORRELATED_SIGNALS, VehicleState
 
@@ -198,10 +199,20 @@ def run_simulator(profile: List[Tuple[str, float]] = DEFAULT_PROFILE) -> None:
         fault_state, make_bus(settings.can_interface, settings.can_channel)
     )
     fault_t.start()
+    j1939_threads: List[threading.Thread] = []
+    if settings.j1939_enabled:
+        j1939_threads = start_j1939_threads(
+            make_bus,
+            settings.can_interface,
+            settings.can_channel,
+            vehicle_state,
+            fault_state,
+        )
     logger.info(
-        "ECU simulation running (%d profile threads + OBD + diagnostics + faults). "
+        "ECU simulation running (%d profile threads + OBD + diagnostics + faults%s). "
         "Press Ctrl-C to exit.",
         len(threads),
+        " + J1939" if j1939_threads else "",
     )
     try:
         while True:

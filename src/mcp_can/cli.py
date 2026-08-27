@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import j1939
 from .bus import make_bus, read_frames, shutdown_bus
 from .config import configure_logging, get_settings
 from .dbc import decode_frame, load_dbc, signal_int
@@ -374,6 +375,145 @@ def fault_scenario(
                 return
         console.print("[yellow]No ack from simulator -- is it running?[/yellow]")
         raise typer.Exit(code=1)
+    finally:
+        shutdown_bus(bus)
+
+
+def _parse_data_bytes(data: str) -> List[int]:
+    """Parse "01 02 0x03" / "1,2,3" style byte lists (shared by j1939 commands)."""
+    parts = [p for p in data.replace(",", " ").split(" ") if p]
+    return [
+        int(x, 16 if x.lower().startswith("0x") or not x.isdigit() else 10) for x in parts
+    ]
+
+
+@app.command("j1939-decode")
+def j1939_decode(
+    id: str = typer.Argument(..., help="29-bit extended CAN ID (hex like 0x18F00400)"),
+    data: str = typer.Argument(..., help="Payload bytes, space- or comma-separated"),
+    json_output: bool = typer.Option(False, "--json", help="Print raw JSON instead of a table"),
+) -> None:
+    """Decompose a J1939 29-bit ID (priority / PGN / addresses) and decode known SPNs."""
+    arb_id = _parse_int(id)
+    payload = bytes(_parse_data_bytes(data))
+    parsed = j1939.parse_can_id(arb_id)
+    definition = j1939.PGN_CATALOG.get(parsed.pgn)
+    signals = j1939.decode_pgn(parsed.pgn, payload)
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "priority": parsed.priority,
+                    "pgn": parsed.pgn,
+                    "pgn_hex": f"0x{parsed.pgn:04X}",
+                    "pgn_name": definition.name if definition else None,
+                    "source_address": parsed.source_address,
+                    "destination_address": parsed.destination_address,
+                    "is_broadcast": parsed.is_broadcast,
+                    "signals": signals,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return
+    header = definition.name if definition else "unknown PGN"
+    table = Table(title=f"J1939  {header}  (PGN 0x{parsed.pgn:04X})")
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("priority", str(parsed.priority))
+    table.add_row("source address", f"0x{parsed.source_address:02X}")
+    da = parsed.destination_address
+    table.add_row("destination", "broadcast" if da is None else f"0x{da:02X}")
+    for name, value in signals.items():
+        table.add_row(name, str(value))
+    console.print(table)
+
+
+@app.command("j1939-pgns")
+def j1939_pgns() -> None:
+    """List the J1939 PGNs/SPNs this project can decode."""
+    for pgn, definition in j1939.PGN_CATALOG.items():
+        if not definition.spns:
+            continue
+        table = Table(title=f"{definition.acronym} - {definition.name}  (PGN 0x{pgn:04X})")
+        table.add_column("SPN")
+        table.add_column("Name")
+        table.add_column("Bits")
+        table.add_column("Scale")
+        table.add_column("Offset")
+        table.add_column("Unit")
+        for s in definition.spns:
+            table.add_row(
+                str(s.spn),
+                s.name,
+                f"{s.start_bit}:{s.length_bits}",
+                str(s.scale),
+                str(s.offset),
+                s.unit or "-",
+            )
+        console.print(table)
+
+
+@app.command("j1939-request")
+def j1939_request(
+    pgn: str = typer.Argument(..., help="PGN to request (hex like 0xF004 or decimal)"),
+    timeout: float = 2.0,
+) -> None:
+    """Send a J1939 Request PGN (0xEA00) and print every decoded response."""
+    requested = _parse_int(pgn)
+    settings = get_settings()
+    bus = make_bus(settings.can_interface, settings.can_channel)
+    try:
+        can_id, data = j1939.build_request_pgn(requested)
+        bus.send(can.Message(arbitration_id=can_id, data=data, is_extended_id=True))
+        responses = []
+        end = _time.time() + timeout
+        while _time.time() < end:
+            msg = bus.recv(timeout=0.1)
+            if not msg or not getattr(msg, "is_extended_id", False):
+                continue
+            parsed = j1939.parse_can_id(msg.arbitration_id)
+            if parsed.pgn != requested:
+                continue
+            responses.append(
+                {
+                    "source_address": parsed.source_address,
+                    "signals": j1939.decode_pgn(parsed.pgn, bytes(msg.data)),
+                }
+            )
+        if not responses:
+            typer.echo(json.dumps({"status": "timeout"}))
+            raise typer.Exit(code=1)
+        typer.echo(json.dumps({"status": "success", "responses": responses}, indent=2, default=str))
+    finally:
+        shutdown_bus(bus)
+
+
+@app.command("j1939-dtcs")
+def j1939_dtcs(seconds: float = typer.Option(3.0, help="How long to listen for a DM1")) -> None:
+    """Listen for a J1939 DM1 broadcast and print its active trouble codes."""
+    settings = get_settings()
+    bus = make_bus(settings.can_interface, settings.can_channel)
+    try:
+        latest = None
+        end = _time.time() + seconds
+        while _time.time() < end:
+            msg = bus.recv(timeout=0.1)
+            if not msg or not getattr(msg, "is_extended_id", False):
+                continue
+            if j1939.parse_can_id(msg.arbitration_id).pgn == j1939.PGN_DM1:
+                latest = msg
+        if latest is None:
+            typer.echo(json.dumps({"status": "timeout"}))
+            raise typer.Exit(code=1)
+        lamps, dtcs = j1939.parse_dm1(bytes(latest.data))
+        typer.echo(
+            json.dumps(
+                {"status": "success", "lamps": lamps, "dtcs": [d.as_dict() for d in dtcs]},
+                indent=2,
+            )
+        )
     finally:
         shutdown_bus(bus)
 

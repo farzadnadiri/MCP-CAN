@@ -6,6 +6,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **SAE J1939 support** (heavy-duty / 29-bit extended IDs), alongside the
+  existing 11-bit light-vehicle bus:
+  - `src/mcp_can/j1939.py` — self-contained protocol logic (not DBC-driven):
+    29-bit ID decomposition (priority / PGN / source + destination address,
+    PDU1 vs PDU2), a curated PGN/SPN catalog (EEC1, EEC2, ET1, CCVS1, LFE1,
+    DD1) with encode/decode, J1939-73 DM1 diagnostic trouble codes
+    (SPN/FMI/OC/CM pack + lamp status), and the Request PGN (`0xEA00`) helper.
+  - `src/mcp_can/simulator/j1939_runner.py` — J1939 simulator threads:
+    periodic PGN broadcasters driven by the same `VehicleState` as the 11-bit
+    signals, a Request PGN responder, and a 1 Hz DM1 emitter. Fault-injection
+    presets map to J1939 DTCs (`overheat` → SPN 110 FMI 0, `abs_fault` → SPN
+    84 FMI 5, `low_fuel` → SPN 96 FMI 18) and drive the MIL lamp.
+  - Four MCP tools: `decode_j1939_frame`, `list_j1939_pgns`,
+    `request_j1939_pgn`, `read_j1939_dtcs`, plus matching CLI commands
+    `mcp-can j1939-decode|j1939-pgns|j1939-request|j1939-dtcs`.
+  - `live_state.py` now also decodes J1939 (29-bit) frames, so J1939 signals
+    show up in `get_vehicle_snapshot` and the dashboard under
+    `J1939:<acronym>`.
+  - `MCP_CAN_J1939_ENABLED` setting (default `true`) to turn the J1939 side
+    of the simulator off.
 - `Settings.cors_allow_origins` (default `["*"]`, override via
   `MCP_CAN_CORS_ALLOW_ORIGINS`) so the SSE endpoint's CORS origins are
   configurable instead of hardcoded.

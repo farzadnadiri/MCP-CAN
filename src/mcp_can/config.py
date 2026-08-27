@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     mcp_transport: Literal["sse", "streamable-http", "stdio"] = "sse"
     max_duration_s: float = 30.0
     log_level: str = "INFO"
+    # Run the SAE J1939 (heavy-duty, 29-bit extended ID) side of the
+    # simulator alongside the light-vehicle 11-bit signals. On by default;
+    # set MCP_CAN_J1939_ENABLED=false for an 11-bit-only bus.
+    j1939_enabled: bool = True
     # Wildcard by default for the zero-friction demo experience (e.g. MCP
     # Inspector connecting from a browser); override before any real
     # deployment. Credentialed CORS is only enabled once this is narrowed to

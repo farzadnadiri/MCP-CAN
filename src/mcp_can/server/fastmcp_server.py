@@ -13,6 +13,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from .. import j1939
 from ..bus import make_bus, shutdown_bus
 from ..config import configure_logging, get_settings
 from ..dbc import decode_frame, load_dbc, signal_int
@@ -31,6 +32,12 @@ from .schemas import (
     DiagnosticResult,
     FaultScenarioResult,
     FrameOut,
+    J1939DecodeResult,
+    J1939Dtc,
+    J1939DtcResult,
+    J1939PgnCatalog,
+    J1939PgnInfo,
+    J1939RequestResult,
     ObdResponse,
     SignalSample,
     SignalState,
@@ -303,6 +310,110 @@ def create_app() -> FastMCP:
             return FaultScenarioResult(status="error", message=str(e))
         finally:
             shutdown_bus(bus)
+
+    def _decode_j1939(arbitration_id: int, data: bytes) -> J1939DecodeResult:
+        parsed = j1939.parse_can_id(arbitration_id)
+        definition = j1939.PGN_CATALOG.get(parsed.pgn)
+        return J1939DecodeResult(
+            status="success",
+            priority=parsed.priority,
+            pgn=parsed.pgn,
+            pgn_hex=f"0x{parsed.pgn:04X}",
+            pgn_name=definition.name if definition else None,
+            source_address=parsed.source_address,
+            destination_address=parsed.destination_address,
+            is_broadcast=parsed.is_broadcast,
+            signals=j1939.decode_pgn(parsed.pgn, data) or None,
+        )
+
+    @mcp.tool()
+    def decode_j1939_frame(arbitration_id: int, data: List[int]) -> J1939DecodeResult:
+        """Decode a 29-bit J1939 frame: split the extended ID into priority /
+        PGN / source + destination address, then decode known SPNs from the
+        payload (see `list_j1939_pgns` for the supported catalog). DM1 frames
+        return their active DTC list."""
+        try:
+            return _decode_j1939(arbitration_id, bytes(data))
+        except Exception as e:
+            return J1939DecodeResult(status="error", message=str(e))
+
+    @mcp.tool()
+    def list_j1939_pgns() -> J1939PgnCatalog:
+        """The catalog of J1939 Parameter Group Numbers this server can decode
+        and (for `request_j1939_pgn`) request from the simulator, each with
+        its Suspect Parameter Numbers, bit layout, scaling and units."""
+        pgns = [
+            J1939PgnInfo(**j1939.describe_pgn(pgn))
+            for pgn, definition in j1939.PGN_CATALOG.items()
+            if definition.spns
+        ]
+        return J1939PgnCatalog(pgns=pgns)
+
+    @mcp.tool()
+    def request_j1939_pgn(pgn: int, timeout_s: float = 2.0) -> J1939RequestResult:
+        """Send a J1939 Request PGN (0xEA00) asking every ECU to transmit
+        `pgn` (e.g. 0xF004 EEC1 for engine speed, 0xFEEE ET1 for coolant
+        temperature) and return the decoded responses seen within timeout_s.
+        Needs a simulator on this process's bus (`mcp-can demo`)."""
+        timeout_s = _capped_duration(timeout_s)
+        bus = make_bus(settings.can_interface, settings.can_channel)
+        try:
+            can_id, data = j1939.build_request_pgn(pgn)
+            bus.send(can.Message(arbitration_id=can_id, data=data, is_extended_id=True))
+            responses: List[J1939DecodeResult] = []
+            end = time.time() + timeout_s
+            while time.time() < end:
+                msg = bus.recv(timeout=0.1)
+                if not msg or not msg.is_extended_id:
+                    continue
+                if j1939.parse_can_id(msg.arbitration_id).pgn == pgn:
+                    responses.append(_decode_j1939(msg.arbitration_id, bytes(msg.data)))
+            if not responses:
+                return J1939RequestResult(
+                    status="timeout",
+                    requested_pgn=pgn,
+                    requested_pgn_hex=f"0x{pgn:04X}",
+                    message="No ECU transmitted the requested PGN within timeout_s",
+                )
+            return J1939RequestResult(
+                status="success",
+                requested_pgn=pgn,
+                requested_pgn_hex=f"0x{pgn:04X}",
+                responses=responses,
+            )
+        except Exception as e:
+            return J1939RequestResult(status="error", message=str(e))
+        finally:
+            shutdown_bus(bus)
+
+    @mcp.tool()
+    def read_j1939_dtcs(duration_s: float = 3.0) -> J1939DtcResult:
+        """Read the most recent J1939 DM1 (active diagnostic trouble codes)
+        broadcast from the last `duration_s` seconds: lamp status plus every
+        active SPN/FMI. Served from the frame history buffer -- see
+        `read_can_frames`. An empty `dtcs` list means no active faults."""
+        duration_s = _capped_duration(duration_s)
+        since = time.time() - duration_s
+        latest: Optional[Dict[str, Any]] = None
+        for f in live_state.frames_since(since):
+            try:
+                parsed = j1939.parse_can_id(f["arbitration_id"])
+            except Exception:
+                continue
+            if parsed.pgn == j1939.PGN_DM1:
+                latest = f
+        if latest is None:
+            return J1939DtcResult(
+                status="timeout", message="No DM1 broadcast seen within duration_s"
+            )
+        parsed = j1939.parse_can_id(latest["arbitration_id"])
+        lamps, dtcs = j1939.parse_dm1(bytes(latest["data"]))
+        return J1939DtcResult(
+            status="success",
+            source_address=parsed.source_address,
+            lamps=lamps,
+            dtcs=[J1939Dtc(**d.as_dict()) for d in dtcs],
+        )
 
     @mcp.resource("file://vehicle.dbc")
     def dbc_info() -> Dict[str, Any]:

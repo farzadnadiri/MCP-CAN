@@ -21,6 +21,7 @@ from typing import Any, Deque, Dict, List, Optional
 
 import cantools
 
+from .. import j1939
 from ..bus import make_bus, shutdown_bus
 from ..dbc import decode_frame
 
@@ -69,6 +70,9 @@ class LiveState:
         self._unit_by_signal: Dict[str, str] = {
             sig.name: (sig.unit or "") for msg in db.messages for sig in msg.signals
         }
+        for definition in j1939.PGN_CATALOG.values():
+            for spn in definition.spns:
+                self._unit_by_signal.setdefault(spn.name, spn.unit)
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True, name="LiveStateListener")
@@ -95,24 +99,40 @@ class LiveState:
                 # Signal/activity tracking is best-effort: frames the DBC
                 # doesn't define (e.g. raw OBD-II responses) still count
                 # toward frame history above, just not toward these.
-                try:
-                    message = self.db.get_message_by_frame_id(msg.arbitration_id)
-                    decoded = decode_frame(self.db, msg.arbitration_id, msg.data)
-                except Exception:
+                message_name: Optional[str] = None
+                decoded: Dict[str, Any] = {}
+                if getattr(msg, "is_extended_id", False):
+                    # 29-bit ID -> try J1939 (the DBC is an 11-bit database).
+                    try:
+                        pgn = j1939.parse_can_id(msg.arbitration_id).pgn
+                        definition = j1939.PGN_CATALOG.get(pgn)
+                        signals = j1939.decode_pgn(pgn, bytes(msg.data))
+                        if definition is not None and signals and "dtcs" not in signals:
+                            message_name = f"J1939:{definition.acronym}"
+                            decoded = signals
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        message_name = self.db.get_message_by_frame_id(msg.arbitration_id).name
+                        decoded = decode_frame(self.db, msg.arbitration_id, msg.data)
+                    except Exception:
+                        pass
+                if message_name is None or not decoded:
                     continue
                 with self._lock:
                     for name, value in decoded.items():
                         self._signals[name] = {
                             "value": _display_value(value),
                             "unit": self._unit_by_signal.get(name, ""),
-                            "message": message.name,
+                            "message": message_name,
                             "timestamp": msg.timestamp,
                         }
                     self._activity.append(
                         {
                             "timestamp": msg.timestamp,
                             "arbitration_id": hex(msg.arbitration_id),
-                            "message": message.name,
+                            "message": message_name,
                         }
                     )
         except Exception:

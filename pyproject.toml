@@ -5,21 +5,49 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcp-can"
 version = "0.1.0"
-description = "MCP + vCAN demo: CAN simulation, DBC decoding, and MCP server."
+description = "MCP server exposing vehicle CAN bus, OBD-II and SAE J1939 diagnostics to LLMs, with a built-in virtual CAN simulator (no hardware required)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
   { name = "farzad", email = "farzadnadiri7@gmail.com" }
 ]
+keywords = [
+  "mcp",
+  "model-context-protocol",
+  "can-bus",
+  "canbus",
+  "obd-ii",
+  "obd2",
+  "j1939",
+  "uds",
+  "automotive",
+  "vehicle-diagnostics",
+  "ecu",
+  "dbc",
+  "socketcan",
+  "python-can",
+  "cantools",
+  "llm",
+  "ai-agents",
+  "simulator",
+]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering",
   "Topic :: System :: Emulators",
+  "Topic :: System :: Hardware",
 ]
-urls = { "Homepage" = "https://github.com/farzadnadiri/MCP-CAN" }
+
 dependencies = [
   "python-can>=4.0",
   "cantools>=40.0",
@@ -31,6 +59,12 @@ dependencies = [
   "uvicorn>=0.22.0",
   "rich>=13.0.0"
 ]
+
+[project.urls]
+Homepage = "https://github.com/farzadnadiri/MCP-CAN"
+Repository = "https://github.com/farzadnadiri/MCP-CAN"
+Issues = "https://github.com/farzadnadiri/MCP-CAN/issues"
+Changelog = "https://github.com/farzadnadiri/MCP-CAN/blob/main/CHANGELOG.md"
 
 [project.scripts]
 mcp-can = "mcp_can.cli:app"

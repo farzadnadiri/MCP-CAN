@@ -1,9 +1,12 @@
-# 🚗 MCP-CAN: Bridging Vehicle Data to LLMs via MCP
-
+# 🚗 MCP-CAN: Vehicle CAN Bus, OBD-II and J1939 Diagnostics for LLMs (Model Context Protocol)
 
 🔌 Virtual CAN + MCP Server
 
-An MCP server purpose-built to surface vehicle CAN/OBD data to an LLM/SLM. It simulates ECUs on a virtual CAN bus, decodes via a DBC, and exposes MCP tools over SSE (or streamable-HTTP), no hardware required by default.
+**MCP-CAN** is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes automotive **CAN bus**, **OBD-II** (SAE J1979), **UDS**, and **SAE J1939** diagnostic data to LLMs and AI agents. It ships a built-in **virtual CAN bus** with an **ECU simulator**, decodes traffic via a **DBC** database (`cantools`), and serves MCP tools over SSE or streamable-HTTP. No CAN hardware, adapter, or vehicle is required by default; optional SocketCAN/vCAN on Linux.
+
+Use it to let an LLM read live CAN frames, decode signals, run OBD-II PID and UDS diagnostic requests, inspect J1939 PGNs/SPNs and DM1 trouble codes, and drive fault-injection scenarios, all against a simulated vehicle.
+
+**Keywords:** MCP server, Model Context Protocol, CAN bus, CANbus, OBD-II, OBD2, on-board diagnostics, SAE J1939, UDS, ECU simulator, vehicle diagnostics, automotive, DBC, python-can, cantools, SocketCAN, LLM tools, AI agents.
 
 ---
 

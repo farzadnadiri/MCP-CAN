@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-28
+
 ### Fixed
 - **`pip install mcp-can` now works outside a repo checkout.** The sample
   `vehicle.dbc` moved to `src/mcp_can/data/` and ships in the wheel;

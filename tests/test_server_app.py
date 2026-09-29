@@ -137,3 +137,11 @@ def test_read_can_frames_served_from_history_buffer():
     assert "ENGINE_SPEED" in snapshot["signals"]
     assert snapshot["signals"]["ENGINE_SPEED"]["message"] == "ENGINE_STATUS"
     assert snapshot["frame_count"] >= 1
+
+
+def test_root_redirects_to_dashboard():
+    app = _make_app()
+    client = TestClient(app.sse_app())
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == "/dashboard"

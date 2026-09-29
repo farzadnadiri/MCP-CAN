@@ -11,7 +11,7 @@ import can
 from mcp.server.fastmcp import FastMCP
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from .. import j1939
 from ..bus import make_bus, shutdown_bus
@@ -484,6 +484,12 @@ def create_app() -> FastMCP:
     # Read-only live dashboard: a static page (below) polling this SSE stream.
     # Only shows data when a simulator shares this process's virtual bus
     # (i.e. `mcp-can demo`) -- see live_state.py.
+    # Someone opening http://localhost:<port>/ in a browser wants the
+    # dashboard, not a bare 404.
+    @mcp.custom_route("/", methods=["GET"])
+    async def _root(_: Request) -> RedirectResponse:
+        return RedirectResponse("/dashboard")
+
     @mcp.custom_route("/dashboard", methods=["GET"])
     async def _dashboard(_: Request) -> HTMLResponse:
         return HTMLResponse(_DASHBOARD_HTML)
@@ -546,6 +552,15 @@ def main() -> None:
         mcp.settings.port,
         settings.mcp_transport,
     )
+    if settings.mcp_transport != "stdio":
+        endpoint = (
+            mcp.settings.sse_path
+            if settings.mcp_transport == "sse"
+            # Older mcp SDKs predate streamable-http and lack this setting.
+            else getattr(mcp.settings, "streamable_http_path", "/mcp")
+        )
+        logger.info("Dashboard:    http://localhost:%s/dashboard", mcp.settings.port)
+        logger.info("MCP endpoint: http://localhost:%s%s", mcp.settings.port, endpoint)
     try:
         mcp.run(transport=settings.mcp_transport)  # type: ignore[arg-type]
     except ValueError:

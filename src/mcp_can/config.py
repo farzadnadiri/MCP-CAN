@@ -1,13 +1,18 @@
 import logging
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Sample DBC shipped inside the package, so `pip install mcp-can` works from
+# any directory without pointing MCP_CAN_DBC_PATH at a checkout.
+DEFAULT_DBC_PATH = str(Path(__file__).parent / "data" / "vehicle.dbc")
 
 
 class Settings(BaseSettings):
     can_interface: str = "virtual"
     can_channel: str = "bus0"
-    dbc_path: str = "vehicle.dbc"
+    dbc_path: str = DEFAULT_DBC_PATH
     mcp_port: int = 6278
     mcp_transport: Literal["sse", "streamable-http", "stdio"] = "sse"
     max_duration_s: float = 30.0

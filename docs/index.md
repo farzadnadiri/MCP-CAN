@@ -39,8 +39,7 @@ default. Optional SocketCAN / vCAN on Linux.
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt
-pip install -e .
+pip install mcp-can
 
 mcp-can demo --port 6278          # simulator + MCP server in one process
 # then point your MCP host at http://localhost:6278/sse

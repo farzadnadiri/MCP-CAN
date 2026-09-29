@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,3 +35,27 @@ jobs:
         run: |
           pytest -q tests
 
+  # Build the sdist/wheel and exercise the *installed* package from outside the
+  # checkout, so anything missing from the wheel (package data, entry points)
+  # fails here rather than for someone running `pip install mcp-can`.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build and check distributions
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check --strict dist/*
+      - name: Smoke-test the installed wheel
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/venv/bin/mcp-can --help
+          /tmp/venv/bin/mcp-can dbc-info
+          /tmp/venv/bin/mcp-can j1939-pgns
+          /tmp/venv/bin/python -c "import mcp_can; print(mcp_can.__version__)"

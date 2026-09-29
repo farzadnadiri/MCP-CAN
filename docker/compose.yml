@@ -5,7 +5,6 @@ services:
     environment:
       - MCP_CAN_CAN_INTERFACE=virtual
       - MCP_CAN_CAN_CHANNEL=bus0
-      - MCP_CAN_DBC_PATH=/home/pi/MCP-Demo/vehicle.dbc
       - MCP_CAN_MCP_PORT=6278
     working_dir: /home/pi/MCP-Demo
     command: bash -lc "mcp-can server --port 6278"
@@ -24,7 +23,6 @@ services:
     environment:
       - MCP_CAN_CAN_INTERFACE=virtual
       - MCP_CAN_CAN_CHANNEL=bus0
-      - MCP_CAN_DBC_PATH=/home/pi/MCP-Demo/vehicle.dbc
     working_dir: /home/pi/MCP-Demo
     command: bash -lc "mcp-can simulate"
 

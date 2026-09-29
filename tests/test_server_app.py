@@ -6,12 +6,12 @@ import time
 import can
 from starlette.testclient import TestClient
 
+from mcp_can.config import DEFAULT_DBC_PATH
 from mcp_can.server.fastmcp_server import create_app
 
 
 def _make_app():
-    dbc_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "vehicle.dbc"))
-    os.environ["MCP_CAN_DBC_PATH"] = dbc_path
+    os.environ["MCP_CAN_DBC_PATH"] = DEFAULT_DBC_PATH
     return create_app()
 
 

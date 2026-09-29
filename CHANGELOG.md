@@ -5,6 +5,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **`pip install mcp-can` now works outside a repo checkout.** The sample
+  `vehicle.dbc` moved to `src/mcp_can/data/` and ships in the wheel;
+  `MCP_CAN_DBC_PATH` defaults to that bundled copy (exposed as
+  `mcp_can.config.DEFAULT_DBC_PATH`). Previously the default was a relative
+  `vehicle.dbc`, so every DBC-backed command failed with `FileNotFoundError`
+  unless run from the repo root.
+
+### Changed
+- Packaging: SPDX `license = "MIT"` + `license-files` (setuptools>=77),
+  version single-sourced from `mcp_can.__version__`, `dev` extra
+  (`pip install -e ".[dev]"`), explicit `__init__.py` for the `server` and
+  `simulator` subpackages.
+- CI tests Python 3.10–3.13 and gains a `package` job that builds the
+  sdist/wheel, runs `twine check`, and smoke-tests the installed wheel from
+  outside the checkout.
+
 ### Added
 - **SAE J1939 support** (heavy-duty / 29-bit extended IDs), alongside the
   existing 11-bit light-vehicle bus:

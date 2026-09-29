@@ -1,5 +1,4 @@
-import os
-
+from mcp_can.config import DEFAULT_DBC_PATH
 from mcp_can.dbc import load_dbc
 from mcp_can.simulator.faults import (
     PRESETS,
@@ -10,8 +9,7 @@ from mcp_can.simulator.faults import (
 
 
 def _db():
-    db_path = os.path.join(os.path.dirname(__file__), "..", "vehicle.dbc")
-    return load_dbc(os.path.abspath(db_path))
+    return load_dbc(DEFAULT_DBC_PATH)
 
 
 def test_build_control_frame_and_preset_from_code_roundtrip():

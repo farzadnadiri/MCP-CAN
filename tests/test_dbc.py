@@ -1,11 +1,9 @@
-import os
-
+from mcp_can.config import DEFAULT_DBC_PATH
 from mcp_can.dbc import decode_frame, load_dbc, signal_int
 
 
 def _db():
-    db_path = os.path.join(os.path.dirname(__file__), "..", "vehicle.dbc")
-    return load_dbc(os.path.abspath(db_path))
+    return load_dbc(DEFAULT_DBC_PATH)
 
 
 def test_dbc_loads_and_has_messages():

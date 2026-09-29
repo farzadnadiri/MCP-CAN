@@ -41,7 +41,7 @@ Use it to let an LLM read live CAN frames, decode signals, run OBD-II PID and UD
   - `server/schemas.py` – Pydantic models for MCP tool structured output
   - `server/live_state.py` – background bus listener backing the dashboard
   - `server/templates/dashboard.html` – the dashboard page itself
-- `vehicle.dbc` – sample CAN database (incl. a UDS-like diagnostic schema)
+- `src/mcp_can/data/vehicle.dbc` – sample CAN database bundled with the package (incl. a UDS-like diagnostic schema)
 - `simulate-ecus.py`, `can-mcp.py` – standalone run-without-installing entrypoints
 - `docker/compose.yml`, `Dockerfile`
 - `tests/` – unit tests
@@ -53,10 +53,18 @@ Use it to let an LLM read live CAN frames, decode signals, run OBD-II PID and UD
 - (Optional) Ollama if you want a local LLM backend
 
 ## 📦 Install (Python)
-From repo root:
+From [PyPI](https://pypi.org/project/mcp-can/):
 ```bash
-pip install -r requirements.txt
-pip install -e .
+pip install mcp-can
+mcp-can demo          # simulator + MCP server in one process, no hardware needed
+```
+Or run it without installing into your environment: `pipx run mcp-can demo` / `uvx mcp-can demo`.
+
+The sample `vehicle.dbc` ships inside the package, so this works from any directory; point `MCP_CAN_DBC_PATH` at your own DBC to use it instead.
+
+From a checkout (for development):
+```bash
+pip install -e ".[dev]"
 ```
 
 ## 🚀 Quickstart (Simulator + MCP Server)
@@ -177,7 +185,7 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 ```
 
 ## ⌨️ CLI Reference
-- `mcp-can simulate` – start ECU simulator using `vehicle.dbc`.
+- `mcp-can simulate` – start ECU simulator using the configured DBC (bundled `vehicle.dbc` by default).
 - `mcp-can server [--port 6278] [--transport sse|streamable-http|stdio]` – run the MCP server.
 - `mcp-can demo [--port] [--transport]` – simulator + server in one process.
 - `mcp-can frames --seconds 1.0` – capture raw frames as JSON.
@@ -199,7 +207,7 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 Env vars (prefix `MCP_CAN_`):
 - `CAN_INTERFACE` (default `virtual`)
 - `CAN_CHANNEL` (default `bus0`)
-- `DBC_PATH` (default `vehicle.dbc`)
+- `DBC_PATH` (default: the `vehicle.dbc` bundled with the package)
 - `MCP_PORT` (default `6278`)
 - `MCP_TRANSPORT` (default `sse`; `streamable-http` requires a newer `mcp` SDK; the server logs a clear error and exits if the installed version doesn't support it, rather than crashing on an SDK traceback)
 - `MAX_DURATION_S` (default `30.0`) – caps every tool's `duration_s`/`timeout_s`
@@ -207,7 +215,7 @@ Env vars (prefix `MCP_CAN_`):
 - `LOG_LEVEL` (default `INFO`)
 - `CORS_ALLOW_ORIGINS` (default `["*"]`, JSON array e.g. `["https://your-host.example"]`) – allowed browser origins for the SSE endpoint. Credentialed requests (`allow_credentials`) are only enabled once this is narrowed to specific origins; wildcard + credentials is a combination browsers reject outright, so it's never turned on for the default `"*"`. Override before any real deployment.
 
-You can set these in a `.env` file at repo root.
+You can also set these in a `.env` file in the working directory.
 
 ## 🐳 Docker
 Build:
@@ -227,9 +235,7 @@ docker compose up -d --build
 ## 🧪 Development & Testing
 See `CONTRIBUTING.md` for the full guide. Quick version:
 ```bash
-pip install -r requirements.txt
-pip install -e .
-pip install pytest ruff mypy
+pip install -e ".[dev]"
 
 ruff check .
 mypy src
@@ -238,7 +244,7 @@ pytest -q
 
 ## 🔧 Troubleshooting
 - No frames? Ensure both simulator and server use the same interface/channel (`virtual`/`bus0` by default), and, on Windows, that they're the same process (`mcp-can demo`) rather than two separate ones.
-- DBC missing? Set `MCP_CAN_DBC_PATH` or place `vehicle.dbc` in repo root.
+- DBC missing? Unset `MCP_CAN_DBC_PATH` to fall back to the bundled sample, or point it at an existing `.dbc` file.
 - Docker networking: expose `6278` so your MCP host can reach it.
 - `streamable-http` transport fails immediately? Your installed `mcp` package predates its support; the log line tells you. Switch to `sse` or `pip install -U mcp` (staying below `2.0.0`).
 

@@ -1,6 +1,6 @@
-import os
 import random
 
+from mcp_can.config import DEFAULT_DBC_PATH
 from mcp_can.dbc import load_dbc
 from mcp_can.simulator.state import (
     CORRELATED_SIGNALS,
@@ -12,8 +12,7 @@ from mcp_can.simulator.state import (
 
 
 def _db():
-    db_path = os.path.join(os.path.dirname(__file__), "..", "vehicle.dbc")
-    return load_dbc(os.path.abspath(db_path))
+    return load_dbc(DEFAULT_DBC_PATH)
 
 
 def test_fuel_never_increases():

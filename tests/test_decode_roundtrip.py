@@ -1,14 +1,11 @@
-import os
-
 import cantools
 
+from mcp_can.config import DEFAULT_DBC_PATH
 from mcp_can.dbc import decode_frame
 
 
 def test_encode_decode_roundtrip_engine_status():
-    db_path = os.path.join(os.path.dirname(__file__), "..", "vehicle.dbc")
-    db_path = os.path.abspath(db_path)
-    db = cantools.database.load_file(db_path)
+    db = cantools.database.load_file(DEFAULT_DBC_PATH)
     msg = db.get_message_by_name("ENGINE_STATUS")
     signals = {
         "ENGINE_SPEED": 1500,

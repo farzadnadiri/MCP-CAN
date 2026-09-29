@@ -77,3 +77,16 @@ def test_j1939_dtcs_reads_dm1(monkeypatch):
     assert out["status"] == "success"
     assert out["lamps"]["malfunction_indicator"] == "on"
     assert out["dtcs"][0]["spn"] == 110 and out["dtcs"][0]["fmi"] == 0
+
+
+def test_j1939_request_accepts_acronym(monkeypatch):
+    can_id = j1939.build_can_id(j1939.PGN_ET1, source_address=0, priority=6)
+    data = j1939.encode_pgn(j1939.PGN_ET1, {"ENGINE_COOLANT_TEMPERATURE": 90.0})
+    fake = FakeBus([FakeMsg(can_id, data)])
+    monkeypatch.setattr(cli_module, "make_bus", lambda *a, **k: fake)
+
+    result = runner.invoke(cli_module.app, ["j1939-request", "ET1", "--timeout", "0.2"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["responses"][0]["signals"][
+        "ENGINE_COOLANT_TEMPERATURE"
+    ] == 90.0

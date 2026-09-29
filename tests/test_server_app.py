@@ -145,3 +145,78 @@ def test_root_redirects_to_dashboard():
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code in (302, 307)
     assert resp.headers["location"] == "/dashboard"
+
+
+class _FakeMsg:
+    def __init__(self, arbitration_id, data):
+        self.arbitration_id = arbitration_id
+        self.data = bytes(data)
+        self.is_extended_id = True
+
+
+class _FakeBus:
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.sent = []
+
+    def recv(self, timeout=None):
+        return self._messages.pop(0) if self._messages else None
+
+    def send(self, msg):
+        self.sent.append(msg)
+
+    def shutdown(self):
+        pass
+
+
+def test_request_j1939_pgn_accepts_acronym(monkeypatch):
+    # Small local models get hex->decimal conversion wrong (asking for 39652
+    # instead of 0xF004 = 61444), so the tool takes "EEC1" / "0xF004" as-is.
+    from mcp_can import j1939
+    from mcp_can.server import fastmcp_server
+
+    can_id = j1939.build_can_id(j1939.PGN_EEC1, source_address=0, priority=3)
+    data = j1939.encode_pgn(j1939.PGN_EEC1, {"ENGINE_SPEED": 1500.0})
+    fake = _FakeBus([_FakeMsg(can_id, data)])
+    monkeypatch.setattr(fastmcp_server, "make_bus", lambda *a, **k: fake)
+    monkeypatch.setattr(fastmcp_server, "shutdown_bus", lambda bus: None)
+
+    app = _make_app()
+    result = asyncio.run(
+        app.call_tool("request_j1939_pgn", {"pgn": "EEC1", "timeout_s": 0.3})
+    )
+    out = json.loads(result[0].text)
+    assert out["status"] == "success", out
+    assert out["requested_pgn_hex"] == "0xF004"
+    assert out["responses"][0]["signals"]["ENGINE_SPEED"] == 1500.0
+    # The Request PGN frame on the bus carries 0xF004, little-endian.
+    assert list(fake.sent[0].data[:3]) == [0x04, 0xF0, 0x00]
+
+
+def test_request_j1939_pgn_timeout_lists_known_pgns(monkeypatch):
+    from mcp_can.server import fastmcp_server
+
+    monkeypatch.setattr(fastmcp_server, "make_bus", lambda *a, **k: _FakeBus([]))
+    monkeypatch.setattr(fastmcp_server, "shutdown_bus", lambda bus: None)
+
+    app = _make_app()
+    result = asyncio.run(
+        app.call_tool("request_j1939_pgn", {"pgn": 39652, "timeout_s": 0.2})
+    )
+    out = json.loads(result[0].text)
+    assert out["status"] == "timeout"
+    assert "0x9AE4" in out["message"]
+    assert "EEC1=0xF004" in out["message"]
+
+
+def test_obd_and_decode_tools_accept_hex_strings():
+    app = _make_app()
+    result = asyncio.run(
+        app.call_tool(
+            "decode_can_frame",
+            {"arbitration_id": "0x100", "data": [0, 0, 0, 0, 0, 0, 0, 0]},
+        )
+    )
+    out = json.loads(result[0].text)
+    assert out["status"] == "success", out
+    assert "ENGINE_SPEED" in out["signals"]

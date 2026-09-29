@@ -5,6 +5,24 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-28
+
+### Changed
+- MCP tools that take IDs (`request_j1939_pgn`'s `pgn`, `arbitration_id`
+  on the decode/filter tools, `send_obd_request`'s `service`/`pid`,
+  `send_diagnostic_request`'s IDs) now accept hex strings (`"0xF004"`,
+  `"F004"`) as well as integers, and `pgn` also accepts J1939 acronyms
+  (`"EEC1"`, `"ET1"`). Small local models were converting hex to decimal
+  wrongly (e.g. requesting PGN 39652 for EEC1's 0xF004) and getting
+  timeouts. A `request_j1939_pgn` timeout now lists the known PGNs so the
+  model can correct itself. Shared parser: `mcp_can.parsing.parse_int`;
+  the CLI uses it too, and `mcp-can j1939-request` accepts acronyms.
+
+### Docs
+- Rewrote the Ollama section around `ollmcp` (Ollama can't reach MCP
+  servers by itself) and pointed at tool-calling models; the previous
+  `llama3` suggestion doesn't support tools.
+
 ## [0.1.2] - 2026-09-28
 
 ### Changed

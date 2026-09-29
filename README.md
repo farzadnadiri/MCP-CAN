@@ -161,28 +161,30 @@ When prompted, connect to your server:
 You can then list tools/resources and call one (e.g. monitor `ENGINE_SPEED` for 5 seconds) and view structured output live.
 
 ## 🤖 Using with Ollama (local LLM)
-1) Ensure Ollama is running: `ollama serve` and pull a model: `ollama pull llama3`
-2) Run simulator + MCP server (see Quickstart).
-3) Point your MCP-capable host at `http://localhost:6278/sse` and configure its model endpoint to `http://localhost:11434` with your model name (e.g., `llama3`).
-4) Prompt the host: "Monitor ENGINE_SPEED for 5 seconds", "List all DBC messages", or "Send a READ_DATA_BY_ID diagnostic request for parameter 5."
+Ollama runs the model but can't connect to MCP servers on its own, so you need a small client in between. [`ollmcp`](https://github.com/jonigl/mcp-client-for-ollama) is the quickest option.
 
-If you need a minimal host, pair `@modelcontextprotocol/sdk` with Ollama (see SDK docs) or use Inspector for manual tool calls.
+1. Pull a model that supports **tool calling**, e.g. `ollama pull qwen3` (`llama3.1` and `gemma4` also work). To check a model, run `ollama show <model>` and look for `tools` under *Capabilities*. Models without it (e.g. the original `llama3`) can chat but can't call the CAN tools.
+2. Terminal A: start the simulator and server:
+   ```bash
+   mcp-can demo
+   ```
+3. Terminal B: connect Ollama to it:
+   ```bash
+   pip install ollmcp
+   ollmcp -u http://localhost:6278/sse -m qwen3
+   ```
+   `ollmcp` should list the 12 MCP-CAN tools on startup.
+4. Type questions into the `ollmcp` chat. It's a conversation with the model, not a shell, so don't type commands there.
+   - "What's the engine speed and coolant temperature right now?"
+   - "Read the OBD-II trouble codes."
+   - "Activate the overheat fault, then read the J1939 DTCs."
+   - "List the J1939 PGNs you can request."
 
-Example host config (OpenAI-compatible endpoint to local Ollama):
-```json
-{
-  "model": {
-    "type": "openai-compatible",
-    "baseUrl": "http://localhost:11434/v1",
-    "model": "llama3"
-  },
-  "mcpServers": {
-    "can-mcp-server": {
-      "serverUrl": "http://localhost:6278/sse"
-    }
-  }
-}
-```
+Tips:
+- `ollmcp` asks before every tool call. Answer `s` to allow tool calls for the rest of the session.
+- Watch the same signals live at `http://localhost:6278` while you chat.
+- Small models sometimes pick a roundabout tool. If an answer looks off, name the tool: "use get_vehicle_snapshot". Tools that take IDs (PGNs, CAN IDs, OBD PIDs, UDS services) accept hex strings like `"0xF004"` and J1939 acronyms like `"EEC1"`, so models don't have to convert hex to decimal (a common source of wrong requests).
+- Other MCP hosts work too: [Open WebUI](https://docs.openwebui.com/) can use Ollama models with MCP tools, and VS Code, Cursor, Windsurf and Claude Desktop can connect to `http://localhost:6278/sse` directly, using their own models.
 
 ## ⌨️ CLI Reference
 - `mcp-can simulate` – start ECU simulator using the configured DBC (bundled `vehicle.dbc` by default).
@@ -198,7 +200,7 @@ Example host config (OpenAI-compatible endpoint to local Ollama):
 - `mcp-can fault <preset|clear|list>` – activate/clear a fault-injection scenario in a running simulator, or list available presets.
 - `mcp-can j1939-decode <id> <data> [--json]` – decompose a 29-bit J1939 ID and decode known SPNs.
 - `mcp-can j1939-pgns` – list the J1939 PGNs/SPNs this project can decode.
-- `mcp-can j1939-request <pgn> [--timeout 2.0]` – send a J1939 Request PGN (`0xEA00`) and print decoded responses.
+- `mcp-can j1939-request <pgn> [--timeout 2.0]` – send a J1939 Request PGN (`0xEA00`) and print decoded responses; `pgn` can be an acronym (`EEC1`), hex (`0xF004`) or decimal.
 - `mcp-can j1939-dtcs [--seconds 3.0]` – listen for a J1939 DM1 broadcast and print its active trouble codes.
 
 `server`/`demo`/`simulate` all print colorized logs (via `rich`) instead of raw text.

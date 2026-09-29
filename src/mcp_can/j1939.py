@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cantools import j1939 as _ct_j1939
 
+from .parsing import IntLike, parse_int
+
 # --- Well-known PGNs (SAE J1939-71 / -73) -----------------------------------
 PGN_EEC1 = 0xF004  # 61444 Electronic Engine Controller 1
 PGN_EEC2 = 0xF003  # 61443 Electronic Engine Controller 2
@@ -403,6 +405,23 @@ def parse_request_pgn(data: bytes) -> Optional[int]:
     if len(data) < 3:
         return None
     return data[0] | (data[1] << 8) | (data[2] << 16)
+
+
+def resolve_pgn(value: IntLike) -> int:
+    """PGN from an int, a decimal/hex string, or a catalog acronym.
+
+    Acronyms are matched first: several ("EEC1", "DD1") are also valid hex.
+    """
+    if isinstance(value, str):
+        for definition in PGN_CATALOG.values():
+            if definition.acronym.lower() == value.strip().lower():
+                return definition.pgn
+    return parse_int(value)
+
+
+def known_pgns_summary() -> str:
+    """``"EEC1=0xF004, ET1=0xFEEE, ..."`` -- for error messages."""
+    return ", ".join(f"{d.acronym}=0x{d.pgn:04X}" for d in PGN_CATALOG.values())
 
 
 def describe_pgn(pgn: int) -> Dict[str, Any]:

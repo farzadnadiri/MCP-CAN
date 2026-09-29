@@ -20,6 +20,7 @@ from .diagnostics import (
     response_code_name,
 )
 from .obd import build_request, decode_response, parse_response
+from .parsing import parse_int
 from .server.fastmcp_server import main as run_server
 from .simulator.faults import FAULT_ACK_ID, PRESETS, build_control_frame
 from .simulator.runner import run_simulator
@@ -31,10 +32,6 @@ console = Console()
 @app.callback()
 def _main_callback() -> None:
     configure_logging()
-
-
-def _parse_int(value: str) -> int:
-    return int(value, 16) if value.lower().startswith("0x") else int(value)
 
 
 @app.command()
@@ -90,7 +87,7 @@ def decode(
     """
     settings = get_settings()
     db = load_dbc(settings.dbc_path)
-    arb_id = _parse_int(id)
+    arb_id = parse_int(id)
     bytes_list: List[int] = []
     if "," in data:
         bytes_list = [
@@ -256,8 +253,8 @@ def obd_request(
     """Send a basic OBD-II (SAE J1979) request and print the first response as JSON."""
     settings = get_settings()
     bus = make_bus(settings.can_interface, settings.can_channel)
-    svc = _parse_int(service)
-    parsed_pid: Optional[int] = _parse_int(pid) if pid is not None else None
+    svc = parse_int(service)
+    parsed_pid: Optional[int] = parse_int(pid) if pid is not None else None
     arb_id, data = build_request(svc, parsed_pid)
     req = can.Message(arbitration_id=arb_id, data=data, is_extended_id=False)
     bus.send(req)
@@ -300,9 +297,9 @@ def diag_request(
         }
         payload = request_msg.encode(
             {
-                "SERVICE_ID": _parse_int(service_id),
-                "PARAMETER_ID": _parse_int(parameter_id),
-                "DATA_FIELD": _parse_int(data_field),
+                "SERVICE_ID": parse_int(service_id),
+                "PARAMETER_ID": parse_int(parameter_id),
+                "DATA_FIELD": parse_int(data_field),
             }
         )
         bus.send(
@@ -394,7 +391,7 @@ def j1939_decode(
     json_output: bool = typer.Option(False, "--json", help="Print raw JSON instead of a table"),
 ) -> None:
     """Decompose a J1939 29-bit ID (priority / PGN / addresses) and decode known SPNs."""
-    arb_id = _parse_int(id)
+    arb_id = parse_int(id)
     payload = bytes(_parse_data_bytes(data))
     parsed = j1939.parse_can_id(arb_id)
     definition = j1939.PGN_CATALOG.get(parsed.pgn)
@@ -457,11 +454,13 @@ def j1939_pgns() -> None:
 
 @app.command("j1939-request")
 def j1939_request(
-    pgn: str = typer.Argument(..., help="PGN to request (hex like 0xF004 or decimal)"),
+    pgn: str = typer.Argument(
+        ..., help="PGN to request: acronym (EEC1), hex (0xF004) or decimal"
+    ),
     timeout: float = 2.0,
 ) -> None:
     """Send a J1939 Request PGN (0xEA00) and print every decoded response."""
-    requested = _parse_int(pgn)
+    requested = j1939.resolve_pgn(pgn)
     settings = get_settings()
     bus = make_bus(settings.can_interface, settings.can_channel)
     try:

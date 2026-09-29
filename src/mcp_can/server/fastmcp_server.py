@@ -24,6 +24,7 @@ from ..diagnostics import (
     response_code_name,
 )
 from ..obd import build_request, decode_response, parse_response
+from ..parsing import IntLike, parse_int
 from ..simulator.faults import FAULT_ACK_ID, PRESETS, build_control_frame
 from .live_state import DEFAULT_HISTORY_WINDOW_S, LiveState
 from .schemas import (
@@ -93,28 +94,31 @@ def create_app() -> FastMCP:
         ]
 
     @mcp.tool()
-    def decode_can_frame(arbitration_id: int, data: List[int]) -> DecodeResult:
-        """Decode a single CAN frame's bytes into named signals using the loaded DBC."""
+    def decode_can_frame(arbitration_id: IntLike, data: List[int]) -> DecodeResult:
+        """Decode a single CAN frame's bytes into named signals using the loaded DBC.
+        `arbitration_id` may be an integer or a hex string like "0x100"."""
         try:
-            decoded = decode_frame(db, arbitration_id, bytes(data))
+            decoded = decode_frame(db, parse_int(arbitration_id), bytes(data))
             return DecodeResult(status="success", signals=decoded)
         except Exception as e:
             return DecodeResult(status="error", message=str(e))
 
     @mcp.tool()
     def filter_frames(
-        arbitration_id: Optional[int] = None,
+        arbitration_id: Optional[IntLike] = None,
         signal_name: Optional[str] = None,
         duration_s: float = 1.0,
     ) -> List[FrameOut]:
         """Frames from the last `duration_s` seconds matching the given
-        arbitration_id and/or containing signal_name once decoded. Served
-        from the frame history buffer -- see `read_can_frames`."""
+        arbitration_id (integer or hex string like "0x100") and/or containing
+        signal_name once decoded. Served from the frame history buffer -- see
+        `read_can_frames`."""
         duration_s = _capped_duration(duration_s)
+        wanted_id = parse_int(arbitration_id) if arbitration_id is not None else None
         since = time.time() - duration_s
         results: List[FrameOut] = []
         for f in live_state.frames_since(since):
-            if arbitration_id is not None and f["arbitration_id"] != arbitration_id:
+            if wanted_id is not None and f["arbitration_id"] != wanted_id:
                 continue
             if signal_name:
                 try:
@@ -182,17 +186,20 @@ def create_app() -> FastMCP:
 
     @mcp.tool()
     def send_obd_request(
-        service: int,
-        pid: Optional[int] = None,
+        service: IntLike,
+        pid: Optional[IntLike] = None,
         timeout_s: float = 2.0,
     ) -> ObdResponse:
-        """Send a standard OBD-II (SAE J1979) request (e.g. service=1, pid=0x0D for
-        vehicle speed) and return the first ECU response, decoded where the PID is
-        one the simulator implements."""
+        """Send a standard OBD-II (SAE J1979) request (e.g. service=1, pid="0x0D"
+        for vehicle speed) and return the first ECU response, decoded where the
+        PID is one the simulator implements. `service` and `pid` may be integers
+        or hex strings."""
         timeout_s = _capped_duration(timeout_s)
         bus = make_bus(settings.can_interface, settings.can_channel)
         try:
-            arb_id, data = build_request(service, pid)
+            arb_id, data = build_request(
+                parse_int(service), parse_int(pid) if pid is not None else None
+            )
             bus.send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=False))
             msg = bus.recv(timeout=timeout_s)
             if not msg:
@@ -213,14 +220,15 @@ def create_app() -> FastMCP:
 
     @mcp.tool()
     def send_diagnostic_request(
-        service_id: int,
-        parameter_id: int = 0,
-        data_field: int = 0,
+        service_id: IntLike,
+        parameter_id: IntLike = 0,
+        data_field: IntLike = 0,
         timeout_s: float = 2.0,
     ) -> DiagnosticResult:
         """Send a UDS-style diagnostic request (see vehicle.dbc's DIAGNOSTIC_REQUEST
-        SERVICE_ID choices, e.g. 0x22=READ_DATA_BY_ID, 0x11=RESET_ECU) and collect
-        responses from every ECU that answers within timeout_s."""
+        SERVICE_ID choices, e.g. "0x22"=READ_DATA_BY_ID, "0x11"=RESET_ECU) and
+        collect responses from every ECU that answers within timeout_s. The ID
+        arguments may be integers or hex strings."""
         timeout_s = _capped_duration(timeout_s)
         request_msg = db.get_message_by_name(REQUEST_MESSAGE)
         response_frame_ids = {
@@ -230,9 +238,9 @@ def create_app() -> FastMCP:
         try:
             payload = request_msg.encode(
                 {
-                    "SERVICE_ID": service_id,
-                    "PARAMETER_ID": parameter_id,
-                    "DATA_FIELD": data_field,
+                    "SERVICE_ID": parse_int(service_id),
+                    "PARAMETER_ID": parse_int(parameter_id),
+                    "DATA_FIELD": parse_int(data_field),
                 }
             )
             bus.send(
@@ -327,13 +335,13 @@ def create_app() -> FastMCP:
         )
 
     @mcp.tool()
-    def decode_j1939_frame(arbitration_id: int, data: List[int]) -> J1939DecodeResult:
-        """Decode a 29-bit J1939 frame: split the extended ID into priority /
-        PGN / source + destination address, then decode known SPNs from the
-        payload (see `list_j1939_pgns` for the supported catalog). DM1 frames
-        return their active DTC list."""
+    def decode_j1939_frame(arbitration_id: IntLike, data: List[int]) -> J1939DecodeResult:
+        """Decode a 29-bit J1939 frame: split the extended ID (integer or hex
+        string like "0x0CF00400") into priority / PGN / source + destination
+        address, then decode known SPNs from the payload (see `list_j1939_pgns`
+        for the supported catalog). DM1 frames return their active DTC list."""
         try:
-            return _decode_j1939(arbitration_id, bytes(data))
+            return _decode_j1939(parse_int(arbitration_id), bytes(data))
         except Exception as e:
             return J1939DecodeResult(status="error", message=str(e))
 
@@ -350,15 +358,18 @@ def create_app() -> FastMCP:
         return J1939PgnCatalog(pgns=pgns)
 
     @mcp.tool()
-    def request_j1939_pgn(pgn: int, timeout_s: float = 2.0) -> J1939RequestResult:
+    def request_j1939_pgn(pgn: IntLike, timeout_s: float = 2.0) -> J1939RequestResult:
         """Send a J1939 Request PGN (0xEA00) asking every ECU to transmit
-        `pgn` (e.g. 0xF004 EEC1 for engine speed, 0xFEEE ET1 for coolant
-        temperature) and return the decoded responses seen within timeout_s.
-        Needs a simulator on this process's bus (`mcp-can demo`)."""
+        `pgn` and return the decoded responses seen within timeout_s. Pass
+        `pgn` as an acronym ("EEC1" for engine speed, "ET1" for coolant
+        temperature), a hex string ("0xF004") or an integer; see
+        `list_j1939_pgns`. Needs a simulator on this process's bus
+        (`mcp-can demo`)."""
         timeout_s = _capped_duration(timeout_s)
         bus = make_bus(settings.can_interface, settings.can_channel)
         try:
-            can_id, data = j1939.build_request_pgn(pgn)
+            requested = j1939.resolve_pgn(pgn)
+            can_id, data = j1939.build_request_pgn(requested)
             bus.send(can.Message(arbitration_id=can_id, data=data, is_extended_id=True))
             responses: List[J1939DecodeResult] = []
             end = time.time() + timeout_s
@@ -366,19 +377,22 @@ def create_app() -> FastMCP:
                 msg = bus.recv(timeout=0.1)
                 if not msg or not msg.is_extended_id:
                     continue
-                if j1939.parse_can_id(msg.arbitration_id).pgn == pgn:
+                if j1939.parse_can_id(msg.arbitration_id).pgn == requested:
                     responses.append(_decode_j1939(msg.arbitration_id, bytes(msg.data)))
             if not responses:
                 return J1939RequestResult(
                     status="timeout",
-                    requested_pgn=pgn,
-                    requested_pgn_hex=f"0x{pgn:04X}",
-                    message="No ECU transmitted the requested PGN within timeout_s",
+                    requested_pgn=requested,
+                    requested_pgn_hex=f"0x{requested:04X}",
+                    message=(
+                        f"No ECU transmitted PGN 0x{requested:04X} within timeout_s. "
+                        f"Known PGNs: {j1939.known_pgns_summary()}"
+                    ),
                 )
             return J1939RequestResult(
                 status="success",
-                requested_pgn=pgn,
-                requested_pgn_hex=f"0x{pgn:04X}",
+                requested_pgn=requested,
+                requested_pgn_hex=f"0x{requested:04X}",
                 responses=responses,
             )
         except Exception as e:

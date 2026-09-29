@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-28
+
 ### Changed
 - `GET /` now redirects to `/dashboard` instead of returning 404, and the
   server logs the dashboard and MCP endpoint URLs at startup.
